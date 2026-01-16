@@ -1,0 +1,56 @@
+CREATE TABLE subjects(
+    subjid INT NOT NULL AUTO_INCREMENT,
+    subjcode TEXT NULL DEFAULT NULL,
+    subjdesc TEXT NULL DEFAULT NULL,
+    subjunits INT NULL DEFAULT NULL,
+    subjsched TEXT NULL,
+    PRIMARY KEY (subjid)
+) AUTO_INCREMENT = 2000;
+
+CREATE TABLE teachers(
+    tid INT NOT NULL AUTO_INCREMENT,
+    tname TEXT NULL DEFAULT NULL,
+    tdept TEXT NULL DEFAULT NULL,
+    tadd TEXT NULL,
+    tcontact TEXT NULL,
+    tstatus TEXT NULL,
+    PRIMARY KEY (tid)
+) AUTO_INCREMENT = 3000;
+
+CREATE TABLE assign(
+    SubjID INT NOT NULL UNIQUE,
+    TID INT NOT NULL,
+    FOREIGN KEY (SubjID) REFERENCES subjects(subjid),
+    FOREIGN KEY (TID) REFERENCES teachers(tid)
+);
+
+CREATE TABLE students(
+    studid INT NOT NULL AUTO_INCREMENT,
+    studname TEXT NOT NULL,
+    studadd TEXT NULL,
+    studcrs TEXT NULL,
+    studgender TEXT NULL,
+    yrlvl TEXT NULL,
+    PRIMARY KEY (studid)
+) AUTO_INCREMENT = 1000;
+
+CREATE TABLE enroll(
+    eid INT NOT NULL AUTO_INCREMENT,
+    studid INT NULL DEFAULT NULL,
+    subjid INT NULL DEFAULT NULL,
+    evaluation TEXT DEFAULT NULL,
+    PRIMARY KEY (eid),
+    UNIQUE (studid, subjid),
+    FOREIGN KEY (studid) REFERENCES students(studid),
+    FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+);
+
+CREATE TABLE grades(
+    gradeid INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
+    enroll_eid INT UNIQUE NOT NULL,
+    prelim TEXT NULL DEFAULT NULL,
+    midterm TEXT NULL DEFAULT NULL,
+    prefinal TEXT NULL DEFAULT NULL,
+    final TEXT NULL DEFAULT NULL,
+    FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
+);
