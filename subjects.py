@@ -105,6 +105,8 @@ try:
                 insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
                 cursor.execute(insert_grade, (eid,))
                 conn.commit()
+            # Redirect with both IDs in URL
+            print(f"<script>window.location.href='subjects.py?subjid={selected_subjid}&studid={selected_studid}';</script>")
         except Exception as e:
             print(f"<!-- Enroll error: {e} -->")  # Already enrolled or error
     
@@ -172,6 +174,17 @@ try:
     <html>
     <head>
         <title>Subject Enrollment System</title>
+        <style>
+            @import url('https://fonts.cdnfonts.com/css/hywenhei');
+            
+            body {
+                font-family: 'HYWenHei', sans-serif;
+            }
+            
+            button {
+                font-family: 'HYWenHei', sans-serif !important;
+            }
+        </style>
         <script>
             let selectedSubjectId = null;
             let selectedSubjectData = null;
@@ -194,8 +207,7 @@ try:
                 document.getElementById('subjunits').value = subjunits;
                 document.getElementById('subjsched').value = subjsched;
                 
-                // Hide enroll button
-                document.getElementById('enrollButton').style.display = 'none';
+                // Hide drop button
                 document.getElementById('dropStudentButton').style.display = 'none';
                 
                 // Update URL to show selected subject
@@ -206,72 +218,14 @@ try:
             }
             
             function loadEnrolledStudents(subjid) {
-                // Create a simple AJAX request to get enrolled students
-                let xhr = new XMLHttpRequest();
-                xhr.open('GET', 'get_students_enrolled.py?subjid=' + subjid, true);
-                xhr.onreadystatechange = function() {
-                    if (xhr.readyState === 4 && xhr.status === 200) {
-                        // Parse the response and update the enrolled students table
-                        let enrolledStudents = JSON.parse(xhr.responseText);
-                        updateEnrolledStudentsTable(enrolledStudents);
-                    }
-                };
-                xhr.send();
-            }
-            
-            function updateEnrolledStudentsTable(students) {
-                let table = document.getElementById('enrolledStudentsTable');
-                // Clear existing rows except header
-                while (table.rows.length > 1) {
-                    table.deleteRow(1);
-                }
-                
-                // Add new rows
-                if (students.length === 0) {
-                    let row = table.insertRow();
-                    let cell = row.insertCell();
-                    cell.colSpan = 6;
-                    cell.align = 'center';
-                    cell.textContent = 'No students enrolled';
-                } else {
-                    for (let student of students) {
-                        let row = table.insertRow();
-                        row.onclick = function() {
-                            selectEnrolledStudent(student.studid, student.studname);
-                        };
-                        row.style.cursor = 'pointer';
-                        
-                        let cell1 = row.insertCell();
-                        cell1.align = 'center';
-                        cell1.textContent = student.studid;
-                        
-                        let cell2 = row.insertCell();
-                        cell2.align = 'center';
-                        cell2.textContent = student.studname;
-                        
-                        let cell3 = row.insertCell();
-                        cell3.align = 'center';
-                        cell3.textContent = student.studadd;
-                        
-                        let cell4 = row.insertCell();
-                        cell4.align = 'center';
-                        cell4.textContent = student.studgender;
-                        
-                        let cell5 = row.insertCell();
-                        cell5.align = 'center';
-                        cell5.textContent = student.studcrs;
-                        
-                        let cell6 = row.insertCell();
-                        cell6.align = 'center';
-                        cell6.textContent = student.yrlvl;
-                    }
-                }
+                // Reload the page with the subjid parameter to show enrolled students
+                window.location.href = 'subjects.py?subjid=' + subjid;
             }
             
             function selectEnrolledStudent(studid, studname) {
                 selectedEnrolledStudentId = studid;
                 document.getElementById('dropStudentButton').style.display = 
-                    selectedSubjectId && selectedEnrolledStudentId ? 'inline' : 'none';
+                    selectedSubjectId && selectedEnrolledStudentId ? 'block' : 'none';
             }
             
             function submitForm(action) {
@@ -357,16 +311,24 @@ try:
                 }
             }
             
+            // Initialize selectedSubjectId from URL on page load
+            window.onload = function() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const subjid = urlParams.get('subjid');
+                if (subjid) {
+                    selectedSubjectId = subjid;
+                }
+            };
+            
             // Update button text dynamically
             setInterval(function() {
-                document.getElementById('enrollSubjId').textContent = selectedSubjectId || '';
                 document.getElementById('dropStudId').textContent = selectedEnrolledStudentId || '';
                 document.getElementById('dropSubjId').textContent = selectedSubjectId || '';
             }, 100);
         </script>
     </head>
     <body>
-        <h1><a href="students.py">Students</a></h1>
+        <p><a href="students.py">Students</a></p>
         
         <!-- Two-column layout -->
         <table width="100%" cellpadding="10">
@@ -405,6 +367,28 @@ try:
                             </tr>
                         </table>
                     </form>
+                    
+                    <!-- Enroll Button (directly below subject form) -->
+                    <br>
+
+                    
+                    <!-- Drop Student Button (below enroll button) -->
+                    <br>
+                    <div id="dropButtonContainer">
+                        <button id="dropStudentButton" onclick="dropStudent()" style="display:none; width: 300px;">
+                            Drop Student ID: <span id="dropStudId"></span> from Subject ID: <span id="dropSubjId"></span>
+                        </button>
+                    </div>
+
+                    </form>
+                    
+                    <!-- Only keep the Drop Student Button -->
+                    <br>
+                    <div id="dropButtonContainer">
+                        <button id="dropStudentButton" onclick="dropStudent()" style="display:none; width: 300px;">
+                            Drop Student ID: <span id="dropStudId"></span> from Subject ID: <span id="dropSubjId"></span>
+                        </button>
+                    </div>
                 </td>
                 
                 <!-- Right column: Subjects Table and Enrolled Students -->
@@ -472,23 +456,6 @@ try:
                 </td>
             </tr>
         </table>
-        
-        <!-- Buttons (hidden by default) -->
-        <div style="position: fixed; bottom: 10px; right: 10px;">
-            <button id="enrollButton" onclick="enrollStudent()" style="display:none; margin: 5px;">
-                Enroll Student ID: <span id="enrollStudId"></span> to Subject ID: <span id="enrollSubjId"></span>
-            </button>
-            <button id="dropStudentButton" onclick="dropStudent()" style="display:none; margin: 5px;">
-                Drop Student ID: <span id="dropStudId"></span> from Subject ID: <span id="dropSubjId"></span>
-            </button>
-        </div>
-        
-        <!-- Enroll Button that appears when subject is selected -->
-        <div style="position: fixed; bottom: 10px; left: 10px;">
-            <button onclick="enrollStudent()" style="margin: 5px;">
-                Enroll Student to Subject ID: <span id="enrollSubjIdDisplay">""" + (str(url_subjid) if url_subjid else '') + """</span>
-            </button>
-        </div>
     </body>
     </html>
     """)
