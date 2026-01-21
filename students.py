@@ -31,91 +31,121 @@ try:
 
     cursor = conn.cursor()
 
-    # First, let's modify the tables to have auto-increment IDs
-    try:
-        # Modify students table to auto-increment studid starting from 1000
-        cursor.execute("ALTER TABLE students MODIFY studid INT NOT NULL AUTO_INCREMENT")
-        cursor.execute("ALTER TABLE students AUTO_INCREMENT = 1000")
-        
-        # Modify subjects table to auto-increment subjid starting from 2000
-        cursor.execute("ALTER TABLE subjects MODIFY subjid INT NOT NULL AUTO_INCREMENT")
-        cursor.execute("ALTER TABLE subjects AUTO_INCREMENT = 2000")
-        
-        conn.commit()
-    except:
-        pass  # Tables might already be modified
-
     # Handle student actions (Insert, Update, Delete)
     if action_type == "insert" and studname:
         try:
+            # Get the maximum studid and calculate the next one starting from 1000
+            cursor.execute("SELECT MAX(studid) FROM students")
+            result = cursor.fetchone()
+            max_studid = result[0]
+            
+            # If no students exist yet, start from 1000
+            if max_studid is None:
+                next_studid = 1000
+            else:
+                # Find the next available ID starting from max(current_max + 1, 1000)
+                next_studid = max(max_studid + 1, 1000)
+            
             insert_sql = """
-                INSERT INTO students (studname, studadd, studcrs, studgender, yrlvl) 
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO students (studid, studname, studadd, studcrs, studgender, yrlvl) 
+                VALUES (%s, %s, %s, %s, %s, %s)
             """
-            cursor.execute(insert_sql, (studname, studadd, studcrs, studgender, yrlvl))
+            cursor.execute(insert_sql, (next_studid, studname, studadd, studcrs, studgender, yrlvl))
             conn.commit()
             # Redirect to show the new student in URL
-            new_studid = cursor.lastrowid
-            print(f"<script>window.location.href='students.py?studid={new_studid}';</script>")
-        except:
+            print(f"<script>window.location.href='students.py?studid={next_studid}';</script>")
+        except Exception as e:
+            print(f"<!-- Insert error: {e} -->")
             pass
     
     elif action_type == "update" and studid and studname:
-        update_sql = """
-            UPDATE students 
-            SET studname=%s, studadd=%s, studcrs=%s, studgender=%s, yrlvl=%s 
-            WHERE studid=%s
-        """
-        cursor.execute(update_sql, (studname, studadd, studcrs, studgender, yrlvl, studid))
-        conn.commit()
-        # Redirect to show updated student in URL
-        print(f"<script>window.location.href='students.py?studid={studid}';</script>")
+        try:
+            update_sql = """
+                UPDATE students 
+                SET studname=%s, studadd=%s, studcrs=%s, studgender=%s, yrlvl=%s 
+                WHERE studid=%s
+            """
+            cursor.execute(update_sql, (studname, studadd, studcrs, studgender, yrlvl, studid))
+            conn.commit()
+            # Redirect to show updated student in URL
+            print(f"<script>window.location.href='students.py?studid={studid}';</script>")
+        except Exception as e:
+            print(f"<!-- Update error: {e} -->")
     
     elif action_type == "delete" and studid:
-        delete_sql = "DELETE FROM students WHERE studid=%s"
-        cursor.execute(delete_sql, (studid,))
-        conn.commit()
-        # Also delete related enrollments and grades
-        delete_enrollments = "DELETE FROM enroll WHERE studid=%s"
-        cursor.execute(delete_enrollments, (studid,))
-        conn.commit()
-        # Redirect to main page
-        print("<script>window.location.href='students.py';</script>")
+        try:
+            # Get all enrollments for this student
+            cursor.execute("SELECT eid FROM enroll WHERE studid=%s", (studid,))
+            enrollments = cursor.fetchall()
+            
+            # Delete from grades for each enrollment
+            for enrollment in enrollments:
+                eid = enrollment[0]
+                delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
+                cursor.execute(delete_grade, (eid,))
+            
+            # Delete from enroll
+            delete_enrollments = "DELETE FROM enroll WHERE studid=%s"
+            cursor.execute(delete_enrollments, (studid,))
+            
+            # Finally delete the student
+            delete_sql = "DELETE FROM students WHERE studid=%s"
+            cursor.execute(delete_sql, (studid,))
+            
+            conn.commit()
+            # Redirect to main page
+            print("<script>window.location.href='students.py';</script>")
+        except Exception as e:
+            print(f"<!-- Delete error: {e} -->")
+            # Still redirect even if there's an error
+            print("<script>window.location.href='students.py';</script>")
 
     # Handle subject enrollment actions
     if subject_action == "enroll" and selected_studid and selected_subjid:
         try:
-            insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
-            cursor.execute(insert_enroll, (selected_studid, selected_subjid))
-            conn.commit()
+            # Check if already enrolled
+            check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
+            cursor.execute(check_sql, (selected_studid, selected_subjid))
+            count = cursor.fetchone()[0]
             
-            # Also insert into grades table
-            get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(get_eid, (selected_studid, selected_subjid))
-            eid = cursor.fetchone()[0]
-            
-            insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
-            cursor.execute(insert_grade, (eid,))
-            conn.commit()
+            if count == 0:
+                insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
+                cursor.execute(insert_enroll, (selected_studid, selected_subjid))
+                conn.commit()
+                
+                # Also insert into grades table
+                get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
+                cursor.execute(get_eid, (selected_studid, selected_subjid))
+                result = cursor.fetchone()
+                if result:
+                    eid = result[0]
+                    insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
+                    cursor.execute(insert_grade, (eid,))
+                    conn.commit()
             # Redirect with both studid and subjid in URL
             print(f"<script>window.location.href='students.py?studid={selected_studid}&subjid={selected_subjid}';</script>")
-        except:
-            pass  # Already enrolled
+        except Exception as e:
+            print(f"<!-- Enroll error: {e} -->")
+            # Still redirect
+            print(f"<script>window.location.href='students.py?studid={selected_studid}';</script>")
     
     elif subject_action == "drop" and selected_studid and selected_subjid:
-        # Get the eid first
-        get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-        cursor.execute(get_eid, (selected_studid, selected_subjid))
-        result = cursor.fetchone()
-        if result:
-            eid = result[0]
-            # Delete from grades first (due to foreign key constraint)
-            delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
-            cursor.execute(delete_grade, (eid,))
-            # Then delete from enroll
-            delete_enroll = "DELETE FROM enroll WHERE eid = %s"
-            cursor.execute(delete_enroll, (eid,))
-            conn.commit()
+        try:
+            # Get the eid first
+            get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
+            cursor.execute(get_eid, (selected_studid, selected_subjid))
+            result = cursor.fetchone()
+            if result:
+                eid = result[0]
+                # Delete from grades first (due to foreign key constraint)
+                delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
+                cursor.execute(delete_grade, (eid,))
+                # Then delete from enroll
+                delete_enroll = "DELETE FROM enroll WHERE eid = %s"
+                cursor.execute(delete_enroll, (eid,))
+                conn.commit()
+        except Exception as e:
+            print(f"<!-- Drop error: {e} -->")
         # Redirect to show student in URL
         print(f"<script>window.location.href='students.py?studid={selected_studid}';</script>")
 
@@ -533,6 +563,16 @@ try:
                 const studid = urlParams.get('studid');
                 if (studid) {
                     selectedStudentId = studid;
+                    // Highlight the selected student row
+                    let rows = document.querySelectorAll('#studentsTable tr');
+                    for (let row of rows) {
+                        let firstCell = row.querySelector('td:first-child');
+                        if (firstCell && firstCell.textContent === studid) {
+                            row.style.backgroundColor = 'rgba(42, 82, 152, 0.15)';
+                            row.style.fontWeight = 'bold';
+                            break;
+                        }
+                    }
                 }
             };
             

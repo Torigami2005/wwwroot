@@ -28,7 +28,7 @@ CREATE TABLE assign(
 
 -- Keep AUTO_INCREMENT for students table only
 CREATE TABLE students(
-    studid INT NOT NULL AUTO_INCREMENT,
+    studid INT NOT NULL,
     studname TEXT NOT NULL,
     studadd TEXT NULL,
     studcrs TEXT NULL,
