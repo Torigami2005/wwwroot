@@ -1,21 +1,23 @@
+-- Remove AUTO_INCREMENT from subjects table
 CREATE TABLE subjects(
-    subjid INT NOT NULL AUTO_INCREMENT,
+    subjid INT NOT NULL,
     subjcode TEXT NULL DEFAULT NULL,
     subjdesc TEXT NULL DEFAULT NULL,
     subjunits INT NULL DEFAULT NULL,
     subjsched TEXT NULL,
     PRIMARY KEY (subjid)
-) AUTO_INCREMENT = 2000;
+);
 
+-- Remove AUTO_INCREMENT from teachers table
 CREATE TABLE teachers(
-    tid INT NOT NULL AUTO_INCREMENT,
+    tid INT NOT NULL,
     tname TEXT NULL DEFAULT NULL,
     tdept TEXT NULL DEFAULT NULL,
     tadd TEXT NULL,
     tcontact TEXT NULL,
     tstatus TEXT NULL,
     PRIMARY KEY (tid)
-) AUTO_INCREMENT = 3000;
+);
 
 CREATE TABLE assign(
     SubjID INT NOT NULL UNIQUE,
@@ -24,6 +26,7 @@ CREATE TABLE assign(
     FOREIGN KEY (TID) REFERENCES teachers(tid)
 );
 
+-- Keep AUTO_INCREMENT for students table only
 CREATE TABLE students(
     studid INT NOT NULL AUTO_INCREMENT,
     studname TEXT NOT NULL,

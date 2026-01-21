@@ -173,24 +173,216 @@ try:
     print("""
     <html>
     <head>
-        <title>Student Enrollment System</title>
+        <title>Universitas Magistorium - Student Enrollment System</title>
         <style>
             @import url('https://fonts.cdnfonts.com/css/hywenhei');
             
             body {
                 font-family: 'HYWenHei', sans-serif;
+                margin: 0;
+                padding: 0;
+                background-color: #f5f5f5;
+            }
+            
+            /* Blue Header - Top Left Alignment */
+            .header {
+                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                color: white;
+                padding: 15px 30px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+            
+            .header-left {
+                display: flex;
+                align-items: center;
+            }
+            
+            .logo {
+                height: 70px;
+                width: 70px;
+                margin-right: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            }
+            
+            .university-info {
+                display: flex;
+                flex-direction: column;
+            }
+            
+            .university-name {
+                font-size: 28px;
+                font-weight: bold;
+                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+                letter-spacing: 1px;
+                line-height: 1.2;
+            }
+            
+            .subtitle {
+                font-size: 16px;
+                opacity: 0.9;
+                margin-top: 3px;
+            }
+            
+            .nav-link {
+                color: white;
+                text-decoration: none;
+                background-color: rgba(255, 255, 255, 0.2);
+                padding: 8px 20px;
+                border-radius: 20px;
+                transition: all 0.3s ease;
+                font-size: 14px;
+            }
+            
+            .nav-link:hover {
+                background-color: rgba(255, 255, 255, 0.3);
+                transform: translateY(-2px);
+            }
+            
+            .main-container {
+                max-width: 1400px;
+                margin: 30px auto;
+                padding: 20px;
             }
             
             button {
                 font-family: 'HYWenHei', sans-serif;
+                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            }
+            
+            button:disabled {
+                background: #cccccc;
+                cursor: not-allowed;
+                transform: none;
+                box-shadow: none;
             }
             
             input, select {
                 font-family: 'HYWenHei', sans-serif;
+                padding: 8px 12px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
             }
             
+            input:focus, select:focus {
+                outline: none;
+                border-color: #2a5298;
+                box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2);
+            }
+            
+            /* Table Styles */
             table {
                 font-family: 'HYWenHei', sans-serif;
+                border-collapse: collapse;
+                width: 100%;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            
+            th {
+                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                color: white;
+                padding: 12px 15px;
+                text-align: center;
+                font-weight: bold;
+                font-size: 16px;
+            }
+            
+            td {
+                padding: 12px 15px;
+                border-bottom: 1px solid #e0e0e0;
+                text-align: center;
+                transition: background-color 0.2s ease;
+            }
+            
+            tr:hover {
+                background-color: rgba(42, 82, 152, 0.05);
+                cursor: pointer;
+            }
+            
+            tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            
+            tr:nth-child(even):hover {
+                background-color: rgba(42, 82, 152, 0.08);
+            }
+            
+            .form-container {
+                background: white;
+                padding: 25px;
+                border-radius: 10px;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+                margin-bottom: 30px;
+            }
+            
+            .form-container h2 {
+                color: #1e3c72;
+                margin-top: 0;
+                border-bottom: 2px solid #1e3c72;
+                padding-bottom: 10px;
+            }
+            
+            .enroll-section {
+                background: white;
+                padding: 25px;
+                border-radius: 10px;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+                margin-top: 20px;
+            }
+            
+            .enroll-section h3 {
+                color: #1e3c72;
+                margin-top: 0;
+            }
+            
+            .two-column-layout {
+                display: grid;
+                grid-template-columns: 1fr 1.5fr;
+                gap: 30px;
+            }
+            
+            @media (max-width: 1024px) {
+                .two-column-layout {
+                    grid-template-columns: 1fr;
+                }
+                
+                .header {
+                    flex-direction: column;
+                    align-items: flex-start;
+                    padding: 15px 20px;
+                }
+                
+                .header-left {
+                    margin-bottom: 15px;
+                }
+                
+                .logo {
+                    height: 60px;
+                    width: 60px;
+                    margin-right: 15px;
+                }
+                
+                .university-name {
+                    font-size: 24px;
+                }
             }
         </style>
         <script>
@@ -218,9 +410,6 @@ try:
                 document.getElementById('studgender').value = studgender;
                 document.getElementById('yrlvl').value = yrlvl;
                 
-                // Hide drop button
-                document.getElementById('dropButton').style.display = 'none';
-                
                 // Update URL to show selected student
                 window.history.pushState({}, '', 'students.py?studid=' + studid);
                 
@@ -230,8 +419,6 @@ try:
             
             function selectEnrolledSubject(subjid, subjcode) {
                 selectedEnrolledSubjectId = subjid;
-                document.getElementById('dropButton').style.display = 
-                    selectedStudentId && selectedEnrolledSubjectId ? 'block' : 'none';
             }
             
             function submitForm(action) {
@@ -358,63 +545,75 @@ try:
         </script>
     </head>
     <body>
-        <p><a href="subjects.py">Subjects</a></p>
+        <!-- Blue Header with Universitas Magistorium and Genshin Impact Image - Top Left -->
+        <div class="header">
+            <div class="header-left">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
+                     alt="Genshin Impact Logo" class="logo">
+                <div class="university-info">
+                    <div class="university-name">Universitas Magistorium</div>
+                    <div class="subtitle">Student Enrollment Management System</div>
+                </div>
+            </div>
+            <a href="subjects.py" class="nav-link">Go to Subjects</a>
+        </div>
         
-        <!-- Two-column layout -->
-        <table width="100%" cellpadding="10">
-            <tr>
+        <div class="main-container">
+            <div class="two-column-layout">
                 <!-- Left column: Student Form -->
-                <td width="40%" valign="top">
-                    <h2>Student Form</h2>
-                    <form method="POST" action="students.py" id="studentForm">
-                        <table>
-                            <tr>
-                                <td>Student ID:</td>
-                                <td><input type="text" name="studid" id="studid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('studid', '')}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Name:</td>
-                                <td><input type="text" name="studname" id="studname" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('studname', ''))}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Address:</td>
-                                <td><input type="text" name="studadd" id="studadd" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('studadd', ''))}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Gender:</td>
-                                <td><input type="text" name="studgender" id="studgender" style="width: 100px" value=""" + f"'{html.escape(prefill_data.get('studgender', ''))}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Course:</td>
-                                <td><input type="text" name="studcrs" id="studcrs" style="width: 150px" value=""" + f"'{html.escape(prefill_data.get('studcrs', ''))}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Year Level:</td>
-                                <td><input type="text" name="yrlvl" id="yrlvl" style="width: 100px" value=""" + f"'{html.escape(prefill_data.get('yrlvl', ''))}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td colspan="2">
-                                    <button type="button" onclick="submitForm('insert')" style="width: 80px">Insert</button>
-                                    <button type="button" onclick="submitForm('update')" style="width: 80px">Update</button>
-                                    <button type="button" onclick="submitForm('delete')" style="width: 80px">Delete</button>
-                                </td>
-                            </tr>
-                        </table>
-                    </form>
+                <div>
+                    <div class="form-container">
+                        <h2>Student Form</h2>
+                        <form method="POST" action="students.py" id="studentForm">
+                            <table style="width: 100%;">
+                                <tr>
+                                    <td>Student ID:</td>
+                                    <td><input type="text" name="studid" id="studid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('studid', '')}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Name:</td>
+                                    <td><input type="text" name="studname" id="studname" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('studname', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Address:</td>
+                                    <td><input type="text" name="studadd" id="studadd" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('studadd', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Gender:</td>
+                                    <td><input type="text" name="studgender" id="studgender" style="width: 100px" value=""" + f"'{html.escape(prefill_data.get('studgender', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Course:</td>
+                                    <td><input type="text" name="studcrs" id="studcrs" style="width: 150px" value=""" + f"'{html.escape(prefill_data.get('studcrs', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Year Level:</td>
+                                    <td><input type="text" name="yrlvl" id="yrlvl" style="width: 100px" value=""" + f"'{html.escape(prefill_data.get('yrlvl', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td colspan="2" style="text-align: center; padding-top: 20px;">
+                                        <button type="button" onclick="submitForm('insert')" style="width: 80px; margin: 0 5px;">Insert</button>
+                                        <button type="button" onclick="submitForm('update')" style="width: 80px; margin: 0 5px;">Update</button>
+                                        <button type="button" onclick="submitForm('delete')" style="width: 80px; margin: 0 5px;">Delete</button>
+                                    </td>
+                                </tr>
+                            </table>
+                        </form>
+                    </div>
                     
                     <!-- Enroll Section (below student form) -->
-                    <br>
-                    <h3>Enroll Student to Subject</h3>
-                    <table>
-                        <tr>
-                            <td>Student ID:</td>
-                            <td><input type="text" id="displayStudId" style="width: 100px; background-color: #f0f0f0;" readonly value=""" + f"'{prefill_data.get('studid', '')}'" + """></td>
-                        </tr>
-                        <tr>
-                            <td>Subject:</td>
-                            <td>
-                                <select id="subjectSelect" style="width: 150px;" onchange="selectSubject()">
-                                    <option value="">Select Subject</option>
+                    <div class="enroll-section">
+                        <h3>Enroll Student to Subject</h3>
+                        <table style="width: 100%;">
+                            <tr>
+                                <td>Student ID:</td>
+                                <td><input type="text" id="displayStudId" style="width: 100px; background-color: #f0f0f0;" readonly value=""" + f"'{prefill_data.get('studid', '')}'" + """></td>
+                            </tr>
+                            <tr>
+                                <td>Subject:</td>
+                                <td>
+                                    <select id="subjectSelect" style="width: 150px;" onchange="selectSubject()">
+                                        <option value="">Select Subject</option>
     """)
 
     # Add all subjects to the dropdown
@@ -422,41 +621,38 @@ try:
         print(f"<option value='{subject[0]}'>{subject[0]} - {html.escape(str(subject[1]))}</option>")
 
     print("""
-                                </select>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td colspan="2" align="center">
-                                <button id="enrollButton" type="button" onclick="enrollStudent()" style="width: 300px; margin-top: 10px;" disabled>
-                                    Enroll Student
-                                </button>
-                            </td>
-                        </tr>
-                    </table>
-                    
-                    <!-- Drop Button (positioned below enroll section) -->
-                    <br>
-                    <div id="dropButtonContainer">
-                        <button id="dropButton" onclick="dropSubject()" style="display:none; width: 300px;">
-                            Drop Subject ID: <span id="dropSubjId"></span> of Student ID: <span id="dropStudId"></span>
-                        </button>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan="2" style="text-align: center; padding-top: 15px;">
+                                    <button id="enrollButton" type="button" onclick="enrollStudent()" style="width: 100%; padding: 12px;" disabled>
+                                        Enroll Student
+                                    </button>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
-                </td>
+                </div>
                 
                 <!-- Right column: Students Table and Enrolled Subjects -->
-                <td width="60%" valign="top">
+                <div>
                     <!-- Students Table -->
-                    <h2>Students Table</h2>
-                    <table border="1" width="100%" id="studentsTable">
-                        <tr>
-                            <th>ID</th>
-                            <th>Name</th>
-                            <th>Address</th>
-                            <th>Gender</th>
-                            <th>Course</th>
-                            <th>Year</th>
-                            <th>Total Units</th>
-                        </tr>
+                    <div class="form-container">
+                        <h2>Students Table</h2>
+                        <table border="1" id="studentsTable">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Address</th>
+                                    <th>Gender</th>
+                                    <th>Course</th>
+                                    <th>Year</th>
+                                    <th>Total Units</th>
+                                </tr>
+                            </thead>
+                            <tbody>
     """)
 
     for student in students:
@@ -465,50 +661,56 @@ try:
                html.escape(str(student[2])) + "\", \"" + 
                html.escape(str(student[4])) + "\", \"" + 
                html.escape(str(student[3])) + "\", \"" + 
-               html.escape(str(student[5])) + "\")' style='cursor:pointer;'>")
-        print("<td align='center'>" + str(student[0]) + "</td>")
-        print("<td align='center'>" + html.escape(str(student[1])) + "</td>")
-        print("<td align='center'>" + html.escape(str(student[2])) + "</td>")
-        print("<td align='center'>" + html.escape(str(student[3])) + "</td>")
-        print("<td align='center'>" + html.escape(str(student[4])) + "</td>")
-        print("<td align='center'>" + html.escape(str(student[5])) + "</td>")
-        print("<td align='center'>" + str(student[6]) + "</td>")
+               html.escape(str(student[5])) + "\")'>")
+        print("<td>" + str(student[0]) + "</td>")
+        print("<td>" + html.escape(str(student[1])) + "</td>")
+        print("<td>" + html.escape(str(student[2])) + "</td>")
+        print("<td>" + html.escape(str(student[3])) + "</td>")
+        print("<td>" + html.escape(str(student[4])) + "</td>")
+        print("<td>" + html.escape(str(student[5])) + "</td>")
+        print("<td>" + str(student[6]) + "</td>")
         print("</tr>")
 
     print("""
-                    </table>
-                    
-                    <br><br>
+                            </tbody>
+                        </table>
+                    </div>
                     
                     <!-- Enrolled Subjects Table -->
-                    <h2>Enrolled Subjects</h2>
-                    <table border="1" width="100%" id="enrolledSubjectsTable">
-                        <tr>
-                            <th>Subject ID</th>
-                            <th>Code</th>
-                            <th>Description</th>
-                            <th>Units</th>
-                            <th>Schedule</th>
-                        </tr>
+                    <div class="form-container" style="margin-top: 30px;">
+                        <h2>Enrolled Subjects</h2>
+                        <table border="1" id="enrolledSubjectsTable">
+                            <thead>
+                                <tr>
+                                    <th>Subject ID</th>
+                                    <th>Code</th>
+                                    <th>Description</th>
+                                    <th>Units</th>
+                                    <th>Schedule</th>
+                                </tr>
+                            </thead>
+                            <tbody>
     """)
 
     if enrolled_subjects:
         for subject in enrolled_subjects:
-            print("<tr onclick='selectEnrolledSubject(" + str(subject[0]) + ", \"" + html.escape(str(subject[1])) + "\")' style='cursor:pointer;'>")
-            print("<td align='center'>" + str(subject[0]) + "</td>")
-            print("<td align='center'>" + html.escape(str(subject[1])) + "</td>")
-            print("<td align='center'>" + html.escape(str(subject[2])) + "</td>")
-            print("<td align='center'>" + str(subject[3]) + "</td>")
-            print("<td align='center'>" + html.escape(str(subject[4])) + "</td>")
+            print("<tr onclick='selectEnrolledSubject(" + str(subject[0]) + ", \"" + html.escape(str(subject[1])) + "\")'>")
+            print("<td>" + str(subject[0]) + "</td>")
+            print("<td>" + html.escape(str(subject[1])) + "</td>")
+            print("<td>" + html.escape(str(subject[2])) + "</td>")
+            print("<td>" + str(subject[3]) + "</td>")
+            print("<td>" + html.escape(str(subject[4])) + "</td>")
             print("</tr>")
     else:
-        print("<tr><td colspan='5' align='center'>No enrolled subjects</td></tr>")
+        print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No enrolled subjects</td></tr>")
 
     print("""
-                    </table>
-                </td>
-            </tr>
-        </table>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
         
         <script>
             // Update the display of selected student ID in the enroll section
