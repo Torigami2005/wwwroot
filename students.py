@@ -203,7 +203,7 @@ try:
     print("""
     <html>
     <head>
-        <title>Universitas Magistorium - Student Enrollment System</title>
+        <title>Sumeru Akademiya - Student Enrollment System</title>
         <style>
             @import url('https://fonts.cdnfonts.com/css/hywenhei');
             
@@ -302,6 +302,16 @@ try:
                 box-shadow: none;
             }
             
+            .drop-button {
+                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            }
+            
+            .drop-button:hover {
+                background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(220, 53, 69, 0.2);
+            }
+            
             input, select {
                 font-family: 'HYWenHei', sans-serif;
                 padding: 8px 12px;
@@ -345,6 +355,11 @@ try:
             tr:hover {
                 background-color: rgba(42, 82, 152, 0.05);
                 cursor: pointer;
+            }
+            
+            .selected-row {
+                background-color: rgba(42, 82, 152, 0.15) !important;
+                font-weight: bold;
             }
             
             tr:nth-child(even) {
@@ -449,6 +464,34 @@ try:
             
             function selectEnrolledSubject(subjid, subjcode) {
                 selectedEnrolledSubjectId = subjid;
+                
+                // Remove previous selection
+                let rows = document.querySelectorAll('#enrolledSubjectsTable tr');
+                rows.forEach(row => row.classList.remove('selected-row'));
+                
+                // Highlight selected row
+                let rowsArray = Array.from(rows);
+                for (let row of rowsArray) {
+                    let firstCell = row.querySelector('td:first-child');
+                    if (firstCell && firstCell.textContent === subjid) {
+                        row.classList.add('selected-row');
+                        break;
+                    }
+                }
+                
+                // Update drop button state
+                updateDropButton();
+            }
+            
+            function updateDropButton() {
+                let dropButton = document.getElementById('dropButton');
+                if (selectedStudentId && selectedEnrolledSubjectId) {
+                    dropButton.disabled = false;
+                    dropButton.innerHTML = 'Drop Student ID: <span id="dropStudId">' + selectedStudentId + '</span> from Subject ID: <span id="dropSubjId">' + selectedEnrolledSubjectId + '</span>';
+                } else {
+                    dropButton.disabled = true;
+                    dropButton.innerHTML = 'Drop Subject';
+                }
             }
             
             function submitForm(action) {
@@ -463,6 +506,7 @@ try:
             
             function dropSubject() {
                 if (selectedStudentId && selectedEnrolledSubjectId) {
+                    // No confirmation dialog - directly drop the subject
                     let form = document.createElement('form');
                     form.method = 'POST';
                     form.action = 'students.py';
@@ -568,19 +612,34 @@ try:
                     for (let row of rows) {
                         let firstCell = row.querySelector('td:first-child');
                         if (firstCell && firstCell.textContent === studid) {
-                            row.style.backgroundColor = 'rgba(42, 82, 152, 0.15)';
-                            row.style.fontWeight = 'bold';
+                            row.classList.add('selected-row');
                             break;
                         }
                     }
                 }
+                
+                // Check if there's a selected subject in URL
+                const subjid = urlParams.get('subjid');
+                if (subjid) {
+                    selectedEnrolledSubjectId = subjid;
+                    // Highlight the selected subject row
+                    let subjectRows = document.querySelectorAll('#enrolledSubjectsTable tr');
+                    for (let row of subjectRows) {
+                        let firstCell = row.querySelector('td:first-child');
+                        if (firstCell && firstCell.textContent === subjid) {
+                            row.classList.add('selected-row');
+                            break;
+                        }
+                    }
+                }
+                
+                updateDropButton();
             };
             
             // Update button text dynamically
             setInterval(function() {
-                document.getElementById('dropStudId').textContent = selectedStudentId || '';
-                document.getElementById('dropSubjId').textContent = selectedEnrolledSubjectId || '';
                 updateEnrollButton();
+                updateDropButton();
             }, 100);
         </script>
     </head>
@@ -591,7 +650,7 @@ try:
                 <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
                      alt="Genshin Impact Logo" class="logo">
                 <div class="university-info">
-                    <div class="university-name">Universitas Magistorium</div>
+                    <div class="university-name">Sumeru Akademiya</div>
                     <div class="subtitle">Student Enrollment Management System</div>
                 </div>
             </div>
@@ -747,6 +806,11 @@ try:
     print("""
                             </tbody>
                         </table>
+                        <div style="margin-top: 20px; text-align: center;">
+                            <button id="dropButton" type="button" onclick="dropSubject()" class="drop-button" style="width: 100%; padding: 12px;" disabled>
+                                Drop Subject
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -765,3 +829,4 @@ try:
 finally:
     if 'conn' in locals():
         conn.close()
+        

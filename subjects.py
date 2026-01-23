@@ -15,11 +15,6 @@ subjdesc = html.escape(form.getvalue("subjdesc", ""))
 subjunits = form.getvalue("subjunits", "")
 subjsched = html.escape(form.getvalue("subjsched", ""))
 
-# For student enrollment to subject
-selected_studid = form.getvalue("selected_studid", "")
-selected_subjid = form.getvalue("selected_subjid", "")
-enroll_action = form.getvalue("enroll_action", "")
-
 try:
     conn = mysql.connector.connect(
         host="localhost",
@@ -86,47 +81,6 @@ try:
         except Exception as e:
             print(f"<!-- Delete error: {e} -->")
 
-    # Handle student enrollment to subject
-    if enroll_action == "enroll" and selected_studid and selected_subjid:
-        try:
-            insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
-            cursor.execute(insert_enroll, (selected_studid, selected_subjid))
-            conn.commit()
-            
-            # Also insert into grades table
-            get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(get_eid, (selected_studid, selected_subjid))
-            result = cursor.fetchone()
-            if result:
-                eid = result[0]
-                insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
-                cursor.execute(insert_grade, (eid,))
-                conn.commit()
-            # Redirect with both IDs in URL
-            print(f"<script>window.location.href='subjects.py?subjid={selected_subjid}&studid={selected_studid}';</script>")
-        except Exception as e:
-            print(f"<!-- Enroll error: {e} -->")  # Already enrolled or error
-    
-    elif enroll_action == "drop" and selected_studid and selected_subjid:
-        try:
-            # Get the eid first
-            get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(get_eid, (selected_studid, selected_subjid))
-            result = cursor.fetchone()
-            if result:
-                eid = result[0]
-                # Delete from grades first (due to foreign key constraint)
-                delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
-                cursor.execute(delete_grade, (eid,))
-                # Then delete from enroll
-                delete_enroll = "DELETE FROM enroll WHERE eid = %s"
-                cursor.execute(delete_enroll, (eid,))
-                conn.commit()
-        except Exception as e:
-            print(f"<!-- Drop error: {e} -->")
-        # Redirect to show subject in URL
-        print(f"<script>window.location.href='subjects.py?subjid={selected_subjid}';</script>")
-
     # Get all subjects with student count calculation
     cursor.execute("""
         SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched, 
@@ -169,7 +123,7 @@ try:
     print("""
     <html>
     <head>
-        <title>Universitas Magistorium - Subject Management System</title>
+        <title>Sumeru Akademiya - Subject Management System</title>
         <style>
             @import url('https://fonts.cdnfonts.com/css/hywenhei');
             
@@ -386,35 +340,9 @@ try:
             }
         </style>
         <script>
-            let selectedSubjectId = null;
-            let selectedSubjectData = null;
-            let selectedEnrolledStudentId = null;
-            
             function selectSubject(subjid, subjcode, subjdesc, subjunits, subjsched) {
-                selectedSubjectId = subjid;
-                selectedSubjectData = {
-                    code: subjcode,
-                    desc: subjdesc,
-                    units: subjunits,
-                    sched: subjsched
-                };
-                selectedEnrolledStudentId = null;
-                
-                // Fill the form with subject data
-                document.getElementById('subjid').value = subjid;
-                document.getElementById('subjcode').value = subjcode;
-                document.getElementById('subjdesc').value = subjdesc;
-                document.getElementById('subjunits').value = subjunits;
-                document.getElementById('subjsched').value = subjsched;
-                
-                // Navigate directly to the URL with the subject ID
+                // Redirect to URL with subject ID
                 window.location.href = 'subjects.py?subjid=' + subjid;
-            }
-            
-            function selectEnrolledStudent(studid, studname) {
-                selectedEnrolledStudentId = studid;
-                document.getElementById('dropStudentButton').style.display = 
-                    selectedSubjectId && selectedEnrolledStudentId ? 'inline-block' : 'none';
             }
             
             function submitForm(action) {
@@ -427,91 +355,11 @@ try:
                 form.submit();
             }
             
-            function enrollStudent() {
-                let studid = prompt("Enter Student ID to enroll:");
-                if (studid && selectedSubjectId) {
-                    // Create a form to submit the enrollment
-                    let form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = 'subjects.py';
-                    
-                    // Add the student ID
-                    let studidInput = document.createElement('input');
-                    studidInput.type = 'hidden';
-                    studidInput.name = 'selected_studid';
-                    studidInput.value = studid;
-                    form.appendChild(studidInput);
-                    
-                    // Add the subject ID
-                    let subjidInput = document.createElement('input');
-                    subjidInput.type = 'hidden';
-                    subjidInput.name = 'selected_subjid';
-                    subjidInput.value = selectedSubjectId;
-                    form.appendChild(subjidInput);
-                    
-                    // Add the action
-                    let actionInput = document.createElement('input');
-                    actionInput.type = 'hidden';
-                    actionInput.name = 'enroll_action';
-                    actionInput.value = 'enroll';
-                    form.appendChild(actionInput);
-                    
-                    // Also include the subjid in URL parameter to maintain state
-                    let urlSubjId = document.createElement('input');
-                    urlSubjId.type = 'hidden';
-                    urlSubjId.name = 'subjid';
-                    urlSubjId.value = selectedSubjectId;
-                    form.appendChild(urlSubjId);
-                    
-                    document.body.appendChild(form);
-                    form.submit();
-                }
-            }
-            
-            function dropStudent() {
-                if (selectedSubjectId && selectedEnrolledStudentId) {
-                    if (confirm("Are you sure you want to drop student " + selectedEnrolledStudentId + " from subject " + selectedSubjectId + "?")) {
-                        let form = document.createElement('form');
-                        form.method = 'POST';
-                        form.action = 'subjects.py';
-                        
-                        let studidInput = document.createElement('input');
-                        studidInput.type = 'hidden';
-                        studidInput.name = 'selected_studid';
-                        studidInput.value = selectedEnrolledStudentId;
-                        form.appendChild(studidInput);
-                        
-                        let subjidInput = document.createElement('input');
-                        subjidInput.type = 'hidden';
-                        subjidInput.name = 'selected_subjid';
-                        subjidInput.value = selectedSubjectId;
-                        form.appendChild(subjidInput);
-                        
-                        let actionInput = document.createElement('input');
-                        actionInput.type = 'hidden';
-                        actionInput.name = 'enroll_action';
-                        actionInput.value = 'drop';
-                        form.appendChild(actionInput);
-                        
-                        // Also include the subjid in URL parameter
-                        let urlSubjId = document.createElement('input');
-                        urlSubjId.type = 'hidden';
-                        urlSubjId.name = 'subjid';
-                        urlSubjId.value = selectedSubjectId;
-                        form.appendChild(urlSubjId);
-                        
-                        document.body.appendChild(form);
-                        form.submit();
-                    }
-                }
-            }
-            
             // Initialize selectedSubjectId from URL on page load
             window.onload = function() {
                 const urlParams = new URLSearchParams(window.location.search);
                 const subjid = urlParams.get('subjid');
                 if (subjid) {
-                    selectedSubjectId = subjid;
                     // Highlight the selected row in the subjects table
                     let rows = document.querySelectorAll('#subjectsTable tr');
                     for (let row of rows) {
@@ -533,7 +381,7 @@ try:
                 <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
                      alt="Genshin Impact Logo" class="logo">
                 <div class="university-info">
-                    <div class="university-name">Universitas Magistorium</div>
+                    <div class="university-name">Sumeru Akademiya</div>
                     <div class="subtitle">Subject Management System</div>
                 </div>
             </div>
@@ -582,27 +430,6 @@ try:
                                     </tr>
                                 </table>
                             </form>
-                        </div>
-                        
-                        <!-- Enrollment Actions -->
-                        <div class="form-container" style="margin-top: 20px;">
-                            <h2>Enrollment Actions</h2>
-                            <div style="text-align: center;">
-                                <button type="button" onclick="enrollStudent()" style="width: 180px; margin: 10px;">
-                                    Enroll Student
-                                </button>
-                                <br>
-                                <button type="button" id="dropStudentButton" onclick="dropStudent()" 
-                                        style="width: 180px; margin: 10px; display: none;">
-                                    Drop Selected Student
-                                </button>
-                                <p style="font-size: 12px; color: #666; margin-top: 10px;">
-                                    <strong>Instructions:</strong><br>
-                                    1. Click a subject in the table to select it<br>
-                                    2. Click a student in the enrolled list to select them<br>
-                                    3. Use the buttons above to enroll/drop students
-                                </p>
-                            </div>
                         </div>
                     </td>
                     
@@ -656,7 +483,7 @@ try:
 
     if enrolled_students:
         for student in enrolled_students:
-            print("<tr onclick='selectEnrolledStudent(" + str(student[0]) + ", \"" + html.escape(str(student[1])) + "\")' style='cursor:pointer;'>")
+            print("<tr>")
             print("<td align='center'>" + str(student[0]) + "</td>")
             print("<td align='center'>" + html.escape(str(student[1])) + "</td>")
             print("<td align='center'>" + html.escape(str(student[2])) + "</td>")
@@ -684,3 +511,4 @@ try:
 finally:
     if 'conn' in locals():
         conn.close()
+        
