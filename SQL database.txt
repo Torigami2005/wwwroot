@@ -1,5 +1,5 @@
--- Remove AUTO_INCREMENT from subjects table
-CREATE TABLE subjects(
+-- Create subjects table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS subjects(
     subjid INT NOT NULL,
     subjcode TEXT NULL DEFAULT NULL,
     subjdesc TEXT NULL DEFAULT NULL,
@@ -8,8 +8,8 @@ CREATE TABLE subjects(
     PRIMARY KEY (subjid)
 );
 
--- Remove AUTO_INCREMENT from teachers table
-CREATE TABLE teachers(
+-- Create teachers table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS teachers(
     tid INT NOT NULL,
     tname TEXT NULL DEFAULT NULL,
     tdept TEXT NULL DEFAULT NULL,
@@ -19,15 +19,16 @@ CREATE TABLE teachers(
     PRIMARY KEY (tid)
 );
 
-CREATE TABLE assign(
+-- Create assign table with foreign keys
+CREATE TABLE IF NOT EXISTS assign(
     SubjID INT NOT NULL UNIQUE,
     TID INT NOT NULL,
     FOREIGN KEY (SubjID) REFERENCES subjects(subjid),
     FOREIGN KEY (TID) REFERENCES teachers(tid)
 );
 
--- Keep AUTO_INCREMENT for students table only
-CREATE TABLE students(
+-- Create students table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS students(
     studid INT NOT NULL,
     studname TEXT NOT NULL,
     studadd TEXT NULL,
@@ -35,9 +36,10 @@ CREATE TABLE students(
     studgender TEXT NULL,
     yrlvl TEXT NULL,
     PRIMARY KEY (studid)
-) AUTO_INCREMENT = 1000;
+);
 
-CREATE TABLE enroll(
+-- Create enroll table with AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS enroll(
     eid INT NOT NULL AUTO_INCREMENT,
     studid INT NULL DEFAULT NULL,
     subjid INT NULL DEFAULT NULL,
@@ -48,7 +50,8 @@ CREATE TABLE enroll(
     FOREIGN KEY (subjid) REFERENCES subjects(subjid)
 );
 
-CREATE TABLE grades(
+-- Create grades table with AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS grades(
     gradeid INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
     enroll_eid INT UNIQUE NOT NULL,
     prelim TEXT NULL DEFAULT NULL,
