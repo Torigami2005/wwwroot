@@ -288,19 +288,6 @@ try:
                 padding-bottom: 10px;
             }
             
-            .enroll-section {
-                background: white;
-                padding: 25px;
-                border-radius: 10px;
-                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-                margin-top: 20px;
-            }
-            
-            .enroll-section h3 {
-                color: #1e3c72;
-                margin-top: 0;
-            }
-            
             .two-column-layout {
                 display: grid;
                 grid-template-columns: 1fr 1.5fr;
@@ -386,7 +373,7 @@ try:
                 </div>
             </div>
             <div class="nav-links">
-                <a href="students.py" class="nav-link">Students</a>
+                <a href="students.py""" + (f"?subjid={url_subjid}" if url_subjid else "") + """" class="nav-link">Students</a>
                 <a href="teachers.py" class="nav-link">Teachers</a>
             </div>
         </div>
@@ -511,4 +498,3 @@ try:
 finally:
     if 'conn' in locals():
         conn.close()
-        
