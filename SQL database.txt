@@ -60,3 +60,4 @@ CREATE TABLE IF NOT EXISTS grades(
     final TEXT NULL DEFAULT NULL,
     FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
 );
+
