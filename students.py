@@ -122,8 +122,14 @@ try:
                     insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
                     cursor.execute(insert_grade, (eid,))
                     conn.commit()
-            # Redirect with both studid and subjid in URL
-            print(f"<script>window.location.href='students.py?studid={selected_studid}&subjid={selected_subjid}';</script>")
+            
+            # Get the URL parameters to preserve
+            url_subjid = form.getvalue("subjid", "")
+            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
+            if url_subjid and url_subjid != selected_subjid:
+                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+            
+            print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
             print(f"<!-- Enroll error: {e} -->")
             # Still redirect
@@ -146,8 +152,14 @@ try:
                 conn.commit()
         except Exception as e:
             print(f"<!-- Drop error: {e} -->")
-        # Redirect to show student in URL
-        print(f"<script>window.location.href='students.py?studid={selected_studid}';</script>")
+        
+        # Get the URL parameters to preserve
+        url_subjid = form.getvalue("subjid", "")
+        redirect_url = f'students.py?studid={selected_studid}'
+        if url_subjid:
+            redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+        
+        print(f"<script>window.location.href='{redirect_url}';</script>")
 
     # Get all students with total units calculation
     cursor.execute("""
@@ -161,15 +173,20 @@ try:
     """)
     students = cursor.fetchall()
 
-    # Get all subjects for the dropdown
-    cursor.execute("SELECT subjid, subjcode FROM subjects ORDER BY subjid")
+    # Get all subjects for the enrollment buttons
+    cursor.execute("SELECT subjid FROM subjects ORDER BY subjid")
     all_subjects = cursor.fetchall()
+    subject_ids = [subject[0] for subject in all_subjects]
 
     # Get enrollment data if a student is selected (from URL parameter)
     enrolled_subjects = []
+    enrolled_subject_ids = []  # List of subject IDs the student is already enrolled in
     total_units_enrolled = 0
-    # Use URL parameter studid if available, otherwise use form parameter
+    
+    # Get URL parameters
     url_studid = form.getvalue("studid", "")
+    url_subjid = form.getvalue("subjid", "")  # Get subjid from URL
+    
     if url_studid:
         selected_studid = url_studid  # Override with URL parameter
         cursor.execute("""
@@ -180,6 +197,9 @@ try:
             ORDER BY s.subjid
         """, (selected_studid,))
         enrolled_subjects = cursor.fetchall()
+        
+        # Get list of enrolled subject IDs
+        enrolled_subject_ids = [subject[0] for subject in enrolled_subjects]
         
         # Calculate total units for enrolled subjects
         for subject in enrolled_subjects:
@@ -302,8 +322,29 @@ try:
                 box-shadow: none;
             }
             
+            .enroll-green-button {
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                padding: 12px 25px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                color: white;
+                cursor: pointer;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+                min-width: 300px;
+                border: none;
+                margin: 5px;
+            }
+            
+            .enroll-green-button:hover:not(:disabled) {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            }
+            
             .drop-button {
                 background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                display: none;
             }
             
             .drop-button:hover {
@@ -404,6 +445,14 @@ try:
                 gap: 30px;
             }
             
+            .enroll-buttons-container {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 10px;
+                margin-top: 15px;
+            }
+            
             @media (max-width: 1024px) {
                 .two-column-layout {
                     grid-template-columns: 1fr;
@@ -428,13 +477,16 @@ try:
                 .university-name {
                     font-size: 24px;
                 }
+                
+                .enroll-green-button {
+                    min-width: 250px;
+                }
             }
         </style>
         <script>
             let selectedStudentId = null;
             let selectedStudentData = null;
             let selectedEnrolledSubjectId = null;
-            let selectedSubjectId = null;
             
             function selectStudent(studid, studname, studadd, studcrs, studgender, yrlvl) {
                 selectedStudentId = studid;
@@ -455,11 +507,16 @@ try:
                 document.getElementById('studgender').value = studgender;
                 document.getElementById('yrlvl').value = yrlvl;
                 
-                // Update URL to show selected student
-                window.history.pushState({}, '', 'students.py?studid=' + studid);
+                // Get current subjid from URL if it exists
+                const urlParams = new URLSearchParams(window.location.search);
+                const currentSubjid = urlParams.get('subjid');
                 
                 // Reload page to show enrolled subjects
-                window.location.href = 'students.py?studid=' + studid;
+                let newUrl = 'students.py?studid=' + studid;
+                if (currentSubjid) {
+                    newUrl += '&subjid=' + currentSubjid;
+                }
+                window.location.href = newUrl;
             }
             
             function selectEnrolledSubject(subjid, subjcode) {
@@ -479,18 +536,12 @@ try:
                     }
                 }
                 
-                // Update drop button state
-                updateDropButton();
-            }
-            
-            function updateDropButton() {
+                // Show drop button ONLY if a subject is clicked
                 let dropButton = document.getElementById('dropButton');
-                if (selectedStudentId && selectedEnrolledSubjectId) {
-                    dropButton.disabled = false;
+                if (dropButton && selectedStudentId && selectedEnrolledSubjectId) {
+                    dropButton.style.display = 'block';
                     dropButton.innerHTML = 'Drop Student ID: <span id="dropStudId">' + selectedStudentId + '</span> from Subject ID: <span id="dropSubjId">' + selectedEnrolledSubjectId + '</span>';
-                } else {
-                    dropButton.disabled = true;
-                    dropButton.innerHTML = 'Drop Subject';
+                    dropButton.disabled = false;
                 }
             }
             
@@ -502,6 +553,55 @@ try:
                 actionInput.value = action;
                 form.appendChild(actionInput);
                 form.submit();
+            }
+            
+            function enrollStudent(subjid) {
+                let studid = document.getElementById('studid').value;
+                
+                if (studid && subjid) {
+                    let form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = 'students.py';
+                    
+                    let studidInput = document.createElement('input');
+                    studidInput.type = 'hidden';
+                    studidInput.name = 'selected_studid';
+                    studidInput.value = studid;
+                    form.appendChild(studidInput);
+                    
+                    let subjidInput = document.createElement('input');
+                    subjidInput.type = 'hidden';
+                    subjidInput.name = 'selected_subjid';
+                    subjidInput.value = subjid;
+                    form.appendChild(subjidInput);
+                    
+                    let actionInput = document.createElement('input');
+                    actionInput.type = 'hidden';
+                    actionInput.name = 'subject_action';
+                    actionInput.value = 'enroll';
+                    form.appendChild(actionInput);
+                    
+                    // Also include the studid in URL parameter
+                    let urlStudId = document.createElement('input');
+                    urlStudId.type = 'hidden';
+                    urlStudId.name = 'studid';
+                    urlStudId.value = studid;
+                    form.appendChild(urlStudId);
+                    
+                    // Include subjid in URL parameter if it exists
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const currentSubjid = urlParams.get('subjid');
+                    if (currentSubjid) {
+                        let urlSubjId = document.createElement('input');
+                        urlSubjId.type = 'hidden';
+                        urlSubjId.name = 'subjid';
+                        urlSubjId.value = currentSubjid;
+                        form.appendChild(urlSubjId);
+                    }
+                    
+                    document.body.appendChild(form);
+                    form.submit();
+                }
             }
             
             function dropSubject() {
@@ -536,68 +636,19 @@ try:
                     urlStudId.value = selectedStudentId;
                     form.appendChild(urlStudId);
                     
-                    document.body.appendChild(form);
-                    form.submit();
-                }
-            }
-            
-            function selectSubject() {
-                selectedSubjectId = document.getElementById('subjectSelect').value;
-                updateEnrollButton();
-            }
-            
-            function updateEnrollButton() {
-                let studid = document.getElementById('studid').value;
-                let subjid = document.getElementById('subjectSelect').value;
-                let enrollButton = document.getElementById('enrollButton');
-                
-                if (studid && subjid) {
-                    enrollButton.disabled = false;
-                    enrollButton.innerHTML = 'Enroll Student ID: <span id="enrollStudId">' + studid + '</span> to Subject ID: <span id="enrollSubjId">' + subjid + '</span>';
-                } else {
-                    enrollButton.disabled = true;
-                    enrollButton.innerHTML = 'Enroll Student';
-                }
-            }
-            
-            function enrollStudent() {
-                let studid = document.getElementById('studid').value;
-                let subjid = document.getElementById('subjectSelect').value;
-                
-                if (studid && subjid) {
-                    let form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = 'students.py';
-                    
-                    let studidInput = document.createElement('input');
-                    studidInput.type = 'hidden';
-                    studidInput.name = 'selected_studid';
-                    studidInput.value = studid;
-                    form.appendChild(studidInput);
-                    
-                    let subjidInput = document.createElement('input');
-                    subjidInput.type = 'hidden';
-                    subjidInput.name = 'selected_subjid';
-                    subjidInput.value = subjid;
-                    form.appendChild(subjidInput);
-                    
-                    let actionInput = document.createElement('input');
-                    actionInput.type = 'hidden';
-                    actionInput.name = 'subject_action';
-                    actionInput.value = 'enroll';
-                    form.appendChild(actionInput);
-                    
-                    // Also include the studid in URL parameter
-                    let urlStudId = document.createElement('input');
-                    urlStudId.type = 'hidden';
-                    urlStudId.name = 'studid';
-                    urlStudId.value = studid;
-                    form.appendChild(urlStudId);
+                    // Include subjid in URL parameter if it exists
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const currentSubjid = urlParams.get('subjid');
+                    if (currentSubjid) {
+                        let urlSubjId = document.createElement('input');
+                        urlSubjId.type = 'hidden';
+                        urlSubjId.name = 'subjid';
+                        urlSubjId.value = currentSubjid;
+                        form.appendChild(urlSubjId);
+                    }
                     
                     document.body.appendChild(form);
                     form.submit();
-                } else {
-                    alert('Please select a student and a subject');
                 }
             }
             
@@ -605,6 +656,8 @@ try:
             window.onload = function() {
                 const urlParams = new URLSearchParams(window.location.search);
                 const studid = urlParams.get('studid');
+                const subjid = urlParams.get('subjid');
+                
                 if (studid) {
                     selectedStudentId = studid;
                     // Highlight the selected student row
@@ -618,29 +671,28 @@ try:
                     }
                 }
                 
-                // Check if there's a selected subject in URL
-                const subjid = urlParams.get('subjid');
-                if (subjid) {
-                    selectedEnrolledSubjectId = subjid;
-                    // Highlight the selected subject row
+                // If there's a subjid in URL (from subjects.py), highlight it in enrolled subjects
+                if (subjid && studid) {
+                    // Highlight the specific subject row if it exists in enrolled subjects
                     let subjectRows = document.querySelectorAll('#enrolledSubjectsTable tr');
                     for (let row of subjectRows) {
                         let firstCell = row.querySelector('td:first-child');
                         if (firstCell && firstCell.textContent === subjid) {
                             row.classList.add('selected-row');
+                            selectedEnrolledSubjectId = subjid;
+                            
+                            // Show drop button for this subject
+                            let dropButton = document.getElementById('dropButton');
+                            if (dropButton) {
+                                dropButton.style.display = 'block';
+                                dropButton.innerHTML = 'Drop Student ID: <span id="dropStudId">' + selectedStudentId + '</span> from Subject ID: <span id="dropSubjId">' + selectedEnrolledSubjectId + '</span>';
+                                dropButton.disabled = false;
+                            }
                             break;
                         }
                     }
                 }
-                
-                updateDropButton();
             };
-            
-            // Update button text dynamically
-            setInterval(function() {
-                updateEnrollButton();
-                updateDropButton();
-            }, 100);
         </script>
     </head>
     <body>
@@ -654,7 +706,7 @@ try:
                     <div class="subtitle">Student Enrollment Management System</div>
                 </div>
             </div>
-            <a href="subjects.py" class="nav-link">Go to Subjects</a>
+            <a href="subjects.py""" + (f"?subjid={url_subjid}" if url_subjid else "") + """" class="nav-link">Go to Subjects</a>
         </div>
         
         <div class="main-container">
@@ -664,6 +716,13 @@ try:
                     <div class="form-container">
                         <h2>Student Form</h2>
                         <form method="POST" action="students.py" id="studentForm">
+    """)
+
+    # Add hidden field for subjid if it exists in URL
+    if url_subjid:
+        print(f"<input type='hidden' name='subjid' value='{url_subjid}'>")
+
+    print("""
                             <table style="width: 100%;">
                                 <tr>
                                     <td>Student ID:</td>
@@ -700,37 +759,59 @@ try:
                         </form>
                     </div>
                     
-                    <!-- Enroll Section (below student form) -->
+                    <!-- Enroll Section (below student form) - ONLY SHOW WHEN SUBJECT ID IS FROM subjects.py -->
                     <div class="enroll-section">
                         <h3>Enroll Student to Subject</h3>
-                        <table style="width: 100%;">
-                            <tr>
-                                <td>Student ID:</td>
-                                <td><input type="text" id="displayStudId" style="width: 100px; background-color: #f0f0f0;" readonly value=""" + f"'{prefill_data.get('studid', '')}'" + """></td>
-                            </tr>
-                            <tr>
-                                <td>Subject:</td>
-                                <td>
-                                    <select id="subjectSelect" style="width: 150px;" onchange="selectSubject()">
-                                        <option value="">Select Subject</option>
     """)
 
-    # Add all subjects to the dropdown
-    for subject in all_subjects:
-        print(f"<option value='{subject[0]}'>{subject[0]} - {html.escape(str(subject[1]))}</option>")
+    # ONLY show enroll buttons if we have a subject ID from subjects.py
+    if url_subjid:
+        # We have a specific subject ID from subjects.py
+        if url_studid and prefill_data.get('studid'):
+            studid = prefill_data.get('studid')
+            
+            # Check if student is already enrolled in this specific subject
+            is_already_enrolled = int(url_subjid) in enrolled_subject_ids
+            
+            print(f"""<div style="text-align: center; margin-bottom: 15px;">
+                        <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Enroll Student to Subject:</p>
+                    </div>""")
+            
+            print("""<div class="enroll-buttons-container" style="justify-content: center;">""")
+            
+            if not is_already_enrolled:
+                # Show single button for the specific subject ID
+                print(f"""<button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button">
+                            Enroll Student ID: {studid} to Subject ID: {url_subjid}
+                        </button>""")
+            else:
+                print(f"""<p style="text-align: center; color: #28a745; padding: 10px; background-color: #f8f9fa; border-radius: 5px; width: 100%;">
+                            Student ID: {studid} is already enrolled in Subject ID: {url_subjid}
+                        </p>""")
+            
+            print("</div>")
+        
+        elif not url_studid:
+            # Have subject ID but no student selected yet
+            print(f"""<div style="text-align: center; margin-bottom: 15px;">
+                        <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Enroll Student to Subject:</p>
+                    </div>""")
+            
+            print("""<div class="enroll-buttons-container" style="justify-content: center;">""")
+            print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
+                        Select a student from the table to enroll in Subject ID: {url_subjid}
+                    </p>""")
+            print("</div>")
+    
+    else:
+        # NO subject ID from subjects.py - DO NOT SHOW ENROLLMENT BUTTONS
+        print("""<div style="text-align: center; padding: 20px;">
+                    <p style="color: #666;">
+                        To enroll students in subjects, go to Subjects page and select a subject first
+                    </p>
+                </div>""")
 
     print("""
-                                    </select>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td colspan="2" style="text-align: center; padding-top: 15px;">
-                                    <button id="enrollButton" type="button" onclick="enrollStudent()" style="width: 100%; padding: 12px;" disabled>
-                                        Enroll Student
-                                    </button>
-                                </td>
-                            </tr>
-                        </table>
                     </div>
                 </div>
                 
@@ -807,7 +888,7 @@ try:
                             </tbody>
                         </table>
                         <div style="margin-top: 20px; text-align: center;">
-                            <button id="dropButton" type="button" onclick="dropSubject()" class="drop-button" style="width: 100%; padding: 12px;" disabled>
+                            <button id="dropButton" type="button" onclick="dropSubject()" class="drop-button" style="width: 100%; padding: 12px; display: none;" disabled>
                                 Drop Subject
                             </button>
                         </div>
@@ -815,13 +896,6 @@ try:
                 </div>
             </div>
         </div>
-        
-        <script>
-            // Update the display of selected student ID in the enroll section
-            setInterval(function() {
-                document.getElementById('displayStudId').value = document.getElementById('studid').value || '';
-            }, 100);
-        </script>
     </body>
     </html>
     """)
