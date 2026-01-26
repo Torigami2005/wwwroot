@@ -21,6 +21,9 @@ selected_studid = form.getvalue("selected_studid", "")
 selected_subjid = form.getvalue("selected_subjid", "")
 subject_action = form.getvalue("subject_action", "")
 
+# Variable to store conflict message
+conflict_message = ""
+
 try:
     conn = mysql.connector.connect(
         host="localhost",
@@ -103,33 +106,50 @@ try:
     # Handle subject enrollment actions
     if subject_action == "enroll" and selected_studid and selected_subjid:
         try:
-            # Check if already enrolled
-            check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(check_sql, (selected_studid, selected_subjid))
-            count = cursor.fetchone()[0]
+            # Check for schedule conflicts BEFORE enrolling
+            cursor.callproc('conflictsched', [selected_studid, selected_subjid, ''])
             
-            if count == 0:
-                insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
-                cursor.execute(insert_enroll, (selected_studid, selected_subjid))
-                conn.commit()
+            # Get the result from the stored procedure
+            for result in cursor.stored_results():
+                conflict_result = result.fetchone()[0]
+            
+            if conflict_result != 'No conflict':
+                # There's a conflict, don't enroll
+                conflict_message = f"""<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>
+                    <strong>Schedule Conflict Detected!</strong><br>
+                    {conflict_result}
+                </div>"""
+            else:
+                # No conflict, proceed with enrollment
+                # Check if already enrolled
+                check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
+                cursor.execute(check_sql, (selected_studid, selected_subjid))
+                count = cursor.fetchone()[0]
                 
-                # Also insert into grades table
-                get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-                cursor.execute(get_eid, (selected_studid, selected_subjid))
-                result = cursor.fetchone()
-                if result:
-                    eid = result[0]
-                    insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
-                    cursor.execute(insert_grade, (eid,))
+                if count == 0:
+                    insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
+                    cursor.execute(insert_enroll, (selected_studid, selected_subjid))
                     conn.commit()
-            
-            # Get the URL parameters to preserve
-            url_subjid = form.getvalue("subjid", "")
-            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
-            if url_subjid and url_subjid != selected_subjid:
-                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
-            
-            print(f"<script>window.location.href='{redirect_url}';</script>")
+                    
+                    # Also insert into grades table
+                    get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
+                    cursor.execute(get_eid, (selected_studid, selected_subjid))
+                    result = cursor.fetchone()
+                    if result:
+                        eid = result[0]
+                        insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
+                        cursor.execute(insert_grade, (eid,))
+                        conn.commit()
+                
+                # Get the URL parameters to preserve
+                url_subjid = form.getvalue("subjid", "")
+                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
+                if url_subjid and url_subjid != selected_subjid:
+                    redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+                
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                exit()
+                
         except Exception as e:
             print(f"<!-- Enroll error: {e} -->")
             # Still redirect
@@ -710,6 +730,13 @@ try:
         </div>
         
         <div class="main-container">
+    """)
+
+    # Display conflict message if there is one
+    if conflict_message:
+        print(conflict_message)
+
+    print("""
             <div class="two-column-layout">
                 <!-- Left column: Student Form -->
                 <div>
