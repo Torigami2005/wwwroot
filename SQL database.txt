@@ -61,3 +61,104 @@ CREATE TABLE IF NOT EXISTS grades(
     FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
 );
 
+
+
+
+
+DELIMITER $$
+
+CREATE PROCEDURE conflictsched(
+    IN studid INT, 
+    IN subjid INT, 
+    OUT result VARCHAR(100)
+)
+BEGIN
+    DECLARE new_sched TEXT;
+    DECLARE days VARCHAR(3);
+    DECLARE stime VARCHAR(5);
+    DECLARE etime VARCHAR(5);
+    DECLARE old_sched TEXT;
+    DECLARE olddays VARCHAR(3);
+    DECLARE oldstime VARCHAR(5);
+    DECLARE oldetime VARCHAR(5);
+    DECLARE n INT;
+    DECLARE i INT DEFAULT 1;
+    DECLARE conflict_found INT DEFAULT 0;
+    DECLARE conflict_msg VARCHAR(100) DEFAULT '';
+    
+    -- Create temporary table for enrolled subjects
+    DROP TEMPORARY TABLE IF EXISTS temp_table;
+    CREATE TEMPORARY TABLE temp_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        subjsched TEXT
+    );
+    
+    -- Insert enrolled subjects into temp table
+    INSERT INTO temp_table (subjsched) 
+    SELECT s.subjsched 
+    FROM subjects s 
+    INNER JOIN enroll e ON s.subjid = e.subjid 
+    WHERE e.studid = studid;
+    
+    -- Get the schedule of the new subject
+    SELECT subjsched INTO new_sched 
+    FROM subjects 
+    WHERE subjid = subjid;
+    
+    -- Parse new schedule
+    SET days = LEFT(new_sched, 3);
+    SET stime = SUBSTRING(new_sched, 5, 5);
+    SET etime = SUBSTRING(new_sched, 11, 5);
+    
+    -- Get count of enrolled subjects
+    SELECT COUNT(*) INTO n FROM temp_table;
+    
+    -- Loop through enrolled subjects to check for conflicts
+    WHILE i <= n AND conflict_found = 0 DO
+        SELECT subjsched INTO old_sched FROM temp_table WHERE id = i;
+        
+        -- Parse old schedule
+        SET olddays = LEFT(old_sched, 3);
+        SET oldstime = SUBSTRING(old_sched, 5, 5);
+        SET oldetime = SUBSTRING(old_sched, 11, 5);
+        
+        -- Check for day overlap
+        IF (
+            -- Check if any day matches (M, T, W, TH, F, S)
+            INSTR(days, LEFT(olddays, 1)) > 0 OR
+            (LENGTH(days) >= 2 AND INSTR(days, MID(olddays, 2, 1)) > 0) OR
+            (LENGTH(days) >= 3 AND INSTR(days, MID(olddays, 3, 1)) > 0) OR
+            INSTR(olddays, LEFT(days, 1)) > 0 OR
+            (LENGTH(olddays) >= 2 AND INSTR(olddays, MID(days, 2, 1)) > 0) OR
+            (LENGTH(olddays) >= 3 AND INSTR(olddays, MID(days, 3, 1)) > 0)
+        ) THEN
+            -- Check for time overlap
+            IF (
+                -- New start time is between old time range
+                (stime >= oldstime AND stime < oldetime) OR
+                -- New end time is between old time range
+                (etime > oldstime AND etime <= oldetime) OR
+                -- New time range completely contains old time range
+                (stime <= oldstime AND etime >= oldetime)
+            ) THEN
+                SET conflict_found = 1;
+                SET conflict_msg = CONCAT('Conflict with ', old_sched);
+            END IF;
+        END IF;
+        
+        SET i = i + 1;
+    END WHILE;
+    
+    -- Set result
+    IF conflict_found = 1 THEN
+        SET result = conflict_msg;
+    ELSE
+        SET result = 'No conflict';
+    END IF;
+    
+    -- Clean up
+    DROP TEMPORARY TABLE IF EXISTS temp_table;
+    
+END$$
+
+DELIMITER ;
