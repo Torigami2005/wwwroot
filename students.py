@@ -21,9 +21,6 @@ selected_studid = form.getvalue("selected_studid", "")
 selected_subjid = form.getvalue("selected_subjid", "")
 subject_action = form.getvalue("subject_action", "")
 
-# Variable to store conflict message
-conflict_message = ""
-
 try:
     conn = mysql.connector.connect(
         host="localhost",
@@ -106,50 +103,51 @@ try:
     # Handle subject enrollment actions
     if subject_action == "enroll" and selected_studid and selected_subjid:
         try:
-            # Check for schedule conflicts BEFORE enrolling
+            # Check for schedule conflicts using the stored procedure
             cursor.callproc('conflictsched', [selected_studid, selected_subjid, ''])
             
             # Get the result from the stored procedure
+            conflict_result = None
             for result in cursor.stored_results():
-                conflict_result = result.fetchone()[0]
+                rows = result.fetchall()
+                if rows and len(rows) > 0:
+                    conflict_result = rows[0][0]
+                    break
             
-            if conflict_result != 'No conflict':
-                # There's a conflict, don't enroll
-                conflict_message = f"""<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>
-                    <strong>Schedule Conflict Detected!</strong><br>
-                    {conflict_result}
-                </div>"""
-            else:
-                # No conflict, proceed with enrollment
-                # Check if already enrolled
-                check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
-                cursor.execute(check_sql, (selected_studid, selected_subjid))
-                count = cursor.fetchone()[0]
-                
-                if count == 0:
-                    insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
-                    cursor.execute(insert_enroll, (selected_studid, selected_subjid))
-                    conn.commit()
-                    
-                    # Also insert into grades table
-                    get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-                    cursor.execute(get_eid, (selected_studid, selected_subjid))
-                    result = cursor.fetchone()
-                    if result:
-                        eid = result[0]
-                        insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
-                        cursor.execute(insert_grade, (eid,))
-                        conn.commit()
-                
-                # Get the URL parameters to preserve
-                url_subjid = form.getvalue("subjid", "")
-                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
-                if url_subjid and url_subjid != selected_subjid:
-                    redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
-                
+            if conflict_result and conflict_result != 'No conflict':
+                # Schedule conflict detected
+                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(conflict_result)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
                 exit()
+            
+            # Check if already enrolled (only proceed if no conflict)
+            check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
+            cursor.execute(check_sql, (selected_studid, selected_subjid))
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
+                cursor.execute(insert_enroll, (selected_studid, selected_subjid))
+                conn.commit()
                 
+                # Also insert into grades table
+                get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
+                cursor.execute(get_eid, (selected_studid, selected_subjid))
+                result = cursor.fetchone()
+                if result:
+                    eid = result[0]
+                    insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
+                    cursor.execute(insert_grade, (eid,))
+                    conn.commit()
+            
+            # Get the URL parameters to preserve
+            url_subjid = form.getvalue("subjid", "")
+            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
+            if url_subjid and url_subjid != selected_subjid:
+                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+            
+            print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
             print(f"<!-- Enroll error: {e} -->")
             # Still redirect
@@ -193,11 +191,6 @@ try:
     """)
     students = cursor.fetchall()
 
-    # Get all subjects for the enrollment buttons
-    cursor.execute("SELECT subjid FROM subjects ORDER BY subjid")
-    all_subjects = cursor.fetchall()
-    subject_ids = [subject[0] for subject in all_subjects]
-
     # Get enrollment data if a student is selected (from URL parameter)
     enrolled_subjects = []
     enrolled_subject_ids = []  # List of subject IDs the student is already enrolled in
@@ -206,6 +199,7 @@ try:
     # Get URL parameters
     url_studid = form.getvalue("studid", "")
     url_subjid = form.getvalue("subjid", "")  # Get subjid from URL
+    error_msg = form.getvalue("error", "")  # Get error message from URL if any
     
     if url_studid:
         selected_studid = url_studid  # Override with URL parameter
@@ -385,6 +379,18 @@ try:
                 outline: none;
                 border-color: #2a5298;
                 box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2);
+            }
+            
+            /* Error Message Styles */
+            .error-message {
+                background-color: #f8d7da;
+                color: #721c24;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #f5c6cb;
+                text-align: center;
+                font-weight: bold;
             }
             
             /* Table Styles */
@@ -732,9 +738,13 @@ try:
         <div class="main-container">
     """)
 
-    # Display conflict message if there is one
-    if conflict_message:
-        print(conflict_message)
+    # Display error message if there's a schedule conflict
+    if error_msg:
+        print(f"""
+            <div class="error-message">
+                ⚠️ Schedule Conflict Detected: {html.unescape(error_msg)}
+            </div>
+        """)
 
     print("""
             <div class="two-column-layout">
