@@ -24,45 +24,101 @@ try:
     )
 
     cursor = conn.cursor()
+    
+    # Variable to store conflict message
+    conflict_message = ""
 
     # Handle subject actions (Insert, Update, Delete)
     if action_type == "insert" and subjcode:
         try:
-            # Get the maximum subjid and calculate the next one starting from 2000
-            cursor.execute("SELECT MAX(subjid) FROM subjects")
-            result = cursor.fetchone()
-            max_subjid = result[0]
-            
-            # If no subjects exist yet, start from 2000
-            if max_subjid is None:
-                next_subjid = 2000
-            else:
-                # Find the next available ID starting from max(current_max + 1, 2000)
-                next_subjid = max(max_subjid + 1, 2000)
-            
-            insert_sql = """
-                INSERT INTO subjects (subjid, subjcode, subjdesc, subjunits, subjsched) 
-                VALUES (%s, %s, %s, %s, %s)
+            # First, check for schedule conflicts with existing subjects
+            # Get all existing subjects with the same schedule
+            check_conflict_sql = """
+                SELECT subjid, subjcode, subjsched 
+                FROM subjects 
+                WHERE subjsched = %s
             """
-            cursor.execute(insert_sql, (next_subjid, subjcode, subjdesc, subjunits, subjsched))
-            conn.commit()
-            # Redirect to show the new subject in URL
-            print(f"<script>window.location.href='subjects.py?subjid={next_subjid}';</script>")
+            cursor.execute(check_conflict_sql, (subjsched,))
+            conflicting_subjects = cursor.fetchall()
+            
+            if conflicting_subjects:
+                # Found conflicts, show error message
+                conflict_list = []
+                for subject in conflicting_subjects:
+                    conflict_list.append(f"Subject ID: {subject[0]} - {subject[1]} ({subject[2]})")
+                
+                conflict_message = f"<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>"
+                conflict_message += "<strong>Schedule Conflict Detected!</strong><br>"
+                conflict_message += f"Schedule '{subjsched}' conflicts with:<br>"
+                conflict_message += "<ul>"
+                for conflict in conflict_list:
+                    conflict_message += f"<li>{conflict}</li>"
+                conflict_message += "</ul>"
+                conflict_message += "Please choose a different schedule.</div>"
+            else:
+                # No conflicts, proceed with insert
+                # Get the maximum subjid and calculate the next one starting from 2000
+                cursor.execute("SELECT MAX(subjid) FROM subjects")
+                result = cursor.fetchone()
+                max_subjid = result[0]
+                
+                # If no subjects exist yet, start from 2000
+                if max_subjid is None:
+                    next_subjid = 2000
+                else:
+                    # Find the next available ID starting from max(current_max + 1, 2000)
+                    next_subjid = max(max_subjid + 1, 2000)
+                
+                insert_sql = """
+                    INSERT INTO subjects (subjid, subjcode, subjdesc, subjunits, subjsched) 
+                    VALUES (%s, %s, %s, %s, %s)
+                """
+                cursor.execute(insert_sql, (next_subjid, subjcode, subjdesc, subjunits, subjsched))
+                conn.commit()
+                # Redirect to show the new subject in URL
+                print(f"<script>window.location.href='subjects.py?subjid={next_subjid}';</script>")
+                exit()
         except Exception as e:
             print(f"<!-- Insert error: {e} -->")
             pass
     
     elif action_type == "update" and subjid and subjcode:
         try:
-            update_sql = """
-                UPDATE subjects 
-                SET subjcode=%s, subjdesc=%s, subjunits=%s, subjsched=%s 
-                WHERE subjid=%s
+            # Check for schedule conflicts (excluding the current subject)
+            check_conflict_sql = """
+                SELECT subjid, subjcode, subjsched 
+                FROM subjects 
+                WHERE subjsched = %s AND subjid != %s
             """
-            cursor.execute(update_sql, (subjcode, subjdesc, subjunits, subjsched, subjid))
-            conn.commit()
-            # Redirect to show updated subject in URL
-            print(f"<script>window.location.href='subjects.py?subjid={subjid}';</script>")
+            cursor.execute(check_conflict_sql, (subjsched, subjid))
+            conflicting_subjects = cursor.fetchall()
+            
+            if conflicting_subjects:
+                # Found conflicts, show error message
+                conflict_list = []
+                for subject in conflicting_subjects:
+                    conflict_list.append(f"Subject ID: {subject[0]} - {subject[1]} ({subject[2]})")
+                
+                conflict_message = f"<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>"
+                conflict_message += "<strong>Schedule Conflict Detected!</strong><br>"
+                conflict_message += f"Schedule '{subjsched}' conflicts with:<br>"
+                conflict_message += "<ul>"
+                for conflict in conflict_list:
+                    conflict_message += f"<li>{conflict}</li>"
+                conflict_message += "</ul>"
+                conflict_message += "Please choose a different schedule.</div>"
+            else:
+                # No conflicts, proceed with update
+                update_sql = """
+                    UPDATE subjects 
+                    SET subjcode=%s, subjdesc=%s, subjunits=%s, subjsched=%s 
+                    WHERE subjid=%s
+                """
+                cursor.execute(update_sql, (subjcode, subjdesc, subjunits, subjsched, subjid))
+                conn.commit()
+                # Redirect to show updated subject in URL
+                print(f"<script>window.location.href='subjects.py?subjid={subjid}';</script>")
+                exit()
         except Exception as e:
             print(f"<!-- Update error: {e} -->")
     
@@ -78,6 +134,7 @@ try:
             conn.commit()
             # Redirect to main page
             print("<script>window.location.href='subjects.py';</script>")
+            exit()
         except Exception as e:
             print(f"<!-- Delete error: {e} -->")
 
@@ -379,6 +436,13 @@ try:
         </div>
         
         <div class="main-container">
+    """)
+
+    # Display conflict message if there is one
+    if conflict_message:
+        print(conflict_message)
+
+    print("""
             <!-- Two-column layout -->
             <table width="100%" cellpadding="10">
                 <tr>
@@ -387,7 +451,20 @@ try:
                         <div class="form-container">
                             <h2>Subject Form</h2>
                             <form method="POST" action="subjects.py" id="subjectForm">
-                                <table style="width: 100%;">
+    """)
+
+    # Pre-fill the form with submitted values if there was a conflict
+    # This prevents losing user input when showing conflict message
+    if conflict_message and action_type in ["insert", "update"]:
+        prefill_data = {
+            'subjid': subjid or '',
+            'subjcode': subjcode or '',
+            'subjdesc': subjdesc or '',
+            'subjunits': subjunits or '',
+            'subjsched': subjsched or ''
+        }
+
+    print("""                                <table style="width: 100%;">
                                     <tr>
                                         <td>Subject ID:</td>
                                         <td><input type="text" name="subjid" id="subjid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('subjid', '')}'" + """></td>
