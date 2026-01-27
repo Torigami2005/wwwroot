@@ -8,7 +8,7 @@ print("Content-Type: text/html\n")
 form = cgi.FieldStorage()
 
 # Get form values
-action_type = form.getvalue("action_type", "")  # insert, update, delete
+action_type = form.getvalue("action_type", "")
 studid = form.getvalue("studid", "")
 studname = html.escape(form.getvalue("studname", ""))
 studadd = html.escape(form.getvalue("studadd", ""))
@@ -31,155 +31,213 @@ try:
 
     cursor = conn.cursor()
 
-    # Handle student actions (Insert, Update, Delete)
+    # Handle student actions
     if action_type == "insert" and studname:
         try:
-            # Get the maximum studid and calculate the next one starting from 1000
             cursor.execute("SELECT MAX(studid) FROM students")
             result = cursor.fetchone()
             max_studid = result[0]
             
-            # If no students exist yet, start from 1000
             if max_studid is None:
                 next_studid = 1000
             else:
-                # Find the next available ID starting from max(current_max + 1, 1000)
                 next_studid = max(max_studid + 1, 1000)
             
-            insert_sql = """
-                INSERT INTO students (studid, studname, studadd, studcrs, studgender, yrlvl) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(insert_sql, (next_studid, studname, studadd, studcrs, studgender, yrlvl))
+            cursor.execute("INSERT INTO students (studid, studname, studadd, studcrs, studgender, yrlvl) VALUES (%s, %s, %s, %s, %s, %s)", 
+                          (next_studid, studname, studadd, studcrs, studgender, yrlvl))
             conn.commit()
-            # Redirect to show the new student in URL
             print(f"<script>window.location.href='students.py?studid={next_studid}';</script>")
         except Exception as e:
-            print(f"<!-- Insert error: {e} -->")
-            pass
+            print(f"<script>window.location.href='students.py';</script>")
     
     elif action_type == "update" and studid and studname:
         try:
-            update_sql = """
-                UPDATE students 
-                SET studname=%s, studadd=%s, studcrs=%s, studgender=%s, yrlvl=%s 
-                WHERE studid=%s
-            """
-            cursor.execute(update_sql, (studname, studadd, studcrs, studgender, yrlvl, studid))
+            cursor.execute("UPDATE students SET studname=%s, studadd=%s, studcrs=%s, studgender=%s, yrlvl=%s WHERE studid=%s", 
+                          (studname, studadd, studcrs, studgender, yrlvl, studid))
             conn.commit()
-            # Redirect to show updated student in URL
             print(f"<script>window.location.href='students.py?studid={studid}';</script>")
         except Exception as e:
-            print(f"<!-- Update error: {e} -->")
+            print(f"<script>window.location.href='students.py?studid={studid}';</script>")
     
     elif action_type == "delete" and studid:
         try:
-            # Get all enrollments for this student
             cursor.execute("SELECT eid FROM enroll WHERE studid=%s", (studid,))
             enrollments = cursor.fetchall()
             
-            # Delete from grades for each enrollment
             for enrollment in enrollments:
                 eid = enrollment[0]
-                delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
-                cursor.execute(delete_grade, (eid,))
+                cursor.execute("DELETE FROM grades WHERE enroll_eid = %s", (eid,))
             
-            # Delete from enroll
-            delete_enrollments = "DELETE FROM enroll WHERE studid=%s"
-            cursor.execute(delete_enrollments, (studid,))
-            
-            # Finally delete the student
-            delete_sql = "DELETE FROM students WHERE studid=%s"
-            cursor.execute(delete_sql, (studid,))
+            cursor.execute("DELETE FROM enroll WHERE studid=%s", (studid,))
+            cursor.execute("DELETE FROM students WHERE studid=%s", (studid,))
             
             conn.commit()
-            # Redirect to main page
             print("<script>window.location.href='students.py';</script>")
         except Exception as e:
-            print(f"<!-- Delete error: {e} -->")
-            # Still redirect even if there's an error
             print("<script>window.location.href='students.py';</script>")
 
-    # Handle subject enrollment actions
+    # Handle subject enrollment
     if subject_action == "enroll" and selected_studid and selected_subjid:
         try:
-            # Check for schedule conflicts using the stored procedure
-            cursor.callproc('conflictsched', [selected_studid, selected_subjid, ''])
+            cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (selected_studid,))
+            student_count = cursor.fetchone()[0]
             
-            # Get the result from the stored procedure
-            conflict_result = None
-            for result in cursor.stored_results():
-                rows = result.fetchall()
-                if rows and len(rows) > 0:
-                    conflict_result = rows[0][0]
-                    break
+            cursor.execute("SELECT COUNT(*) FROM subjects WHERE subjid = %s", (selected_subjid,))
+            subject_count = cursor.fetchone()[0]
             
-            if conflict_result and conflict_result != 'No conflict':
-                # Schedule conflict detected
-                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(conflict_result)}'
+            if student_count == 0 or subject_count == 0:
+                error_msg = "Student or Subject not found"
+                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
                 exit()
             
-            # Check if already enrolled (only proceed if no conflict)
-            check_sql = "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(check_sql, (selected_studid, selected_subjid))
+            cursor.execute("SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid))
             count = cursor.fetchone()[0]
             
-            if count == 0:
-                insert_enroll = "INSERT INTO enroll (studid, subjid) VALUES (%s, %s)"
-                cursor.execute(insert_enroll, (selected_studid, selected_subjid))
-                conn.commit()
+            if count > 0:
+                error_msg = "Student is already enrolled in this subject"
+                redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                exit()
+            
+            # Check for schedule conflicts - DIRECT SQL
+            cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (selected_subjid,))
+            new_subject = cursor.fetchone()
+            new_sched = new_subject[0] if new_subject else ""
+            
+            if new_sched and new_sched.strip():
+                # Get enrolled subjects for the student
+                cursor.execute("""
+                    SELECT s.subjsched 
+                    FROM subjects s
+                    INNER JOIN enroll e ON s.subjid = e.subjid 
+                    WHERE e.studid = %s AND s.subjsched IS NOT NULL AND s.subjsched != ''
+                """, (selected_studid,))
+                enrolled_schedules = cursor.fetchall()
                 
-                # Also insert into grades table
-                get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-                cursor.execute(get_eid, (selected_studid, selected_subjid))
-                result = cursor.fetchone()
-                if result:
-                    eid = result[0]
-                    insert_grade = "INSERT INTO grades (enroll_eid) VALUES (%s)"
-                    cursor.execute(insert_grade, (eid,))
-                    conn.commit()
+                # Parse new schedule
+                new_sched_clean = new_sched.strip()
+                
+                if len(new_sched_clean) >= 3:
+                    new_days = new_sched_clean[:3]  # First 3 chars are days
+                    
+                    # Find dash position
+                    dash_pos = new_sched_clean.find('-')
+                    if dash_pos != -1:
+                        # Get time part (after days)
+                        time_part = new_sched_clean[3:].strip()
+                        
+                        # Handle multiple spaces
+                        if ' ' in time_part:
+                            # Remove extra spaces, keep just the time part
+                            time_part = time_part.replace(' ', '')
+                        
+                        # Split start and end times
+                        if '-' in time_part:
+                            new_stime, new_etime = time_part.split('-')
+                            new_stime = new_stime.strip()
+                            new_etime = new_etime.strip()
+                            
+                            # Convert to minutes
+                            new_start_hour = int(new_stime[:2])
+                            new_start_min = int(new_stime[3:5])
+                            new_end_hour = int(new_etime[:2])
+                            new_end_min = int(new_etime[3:5])
+                            new_start_minutes = (new_start_hour * 60) + new_start_min
+                            new_end_minutes = (new_end_hour * 60) + new_end_min
+                            
+                            # Check each enrolled subject
+                            for enrolled in enrolled_schedules:
+                                old_sched = enrolled[0].strip() if enrolled[0] else ""
+                                
+                                if old_sched and len(old_sched) >= 3:
+                                    old_days = old_sched[:3]
+                                    
+                                    # Only check if same days
+                                    if old_days == new_days:
+                                        old_dash_pos = old_sched.find('-')
+                                        if old_dash_pos != -1:
+                                            # Get time part for old schedule
+                                            old_time_part = old_sched[3:].strip()
+                                            
+                                            # Handle multiple spaces
+                                            if ' ' in old_time_part:
+                                                old_time_part = old_time_part.replace(' ', '')
+                                            
+                                            if '-' in old_time_part:
+                                                old_stime, old_etime = old_time_part.split('-')
+                                                old_stime = old_stime.strip()
+                                                old_etime = old_etime.strip()
+                                                
+                                                # Convert to minutes
+                                                old_start_hour = int(old_stime[:2])
+                                                old_start_min = int(old_stime[3:5])
+                                                old_end_hour = int(old_etime[:2])
+                                                old_end_min = int(old_etime[3:5])
+                                                old_start_minutes = (old_start_hour * 60) + old_start_min
+                                                old_end_minutes = (old_end_hour * 60) + old_end_min
+                                                
+                                                # Check for time overlap
+                                                # NOT (new ends before old starts OR new starts after old ends)
+                                                if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
+                                                    conflict_msg = f"Conflict with {old_sched}"
+                                                    redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(conflict_msg)}'
+                                                    print(f"<script>window.location.href='{redirect_url}';</script>")
+                                                    conn.close()
+                                                    exit()
             
-            # Get the URL parameters to preserve
-            url_subjid = form.getvalue("subjid", "")
-            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}'
-            if url_subjid and url_subjid != selected_subjid:
-                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+            cursor.execute("INSERT INTO enroll (studid, subjid) VALUES (%s, %s)", (selected_studid, selected_subjid))
+            conn.commit()
             
-            print(f"<script>window.location.href='{redirect_url}';</script>")
-        except Exception as e:
-            print(f"<!-- Enroll error: {e} -->")
-            # Still redirect
-            print(f"<script>window.location.href='students.py?studid={selected_studid}';</script>")
-    
-    elif subject_action == "drop" and selected_studid and selected_subjid:
-        try:
-            # Get the eid first
-            get_eid = "SELECT eid FROM enroll WHERE studid = %s AND subjid = %s"
-            cursor.execute(get_eid, (selected_studid, selected_subjid))
+            cursor.execute("SELECT eid FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid))
             result = cursor.fetchone()
             if result:
                 eid = result[0]
-                # Delete from grades first (due to foreign key constraint)
-                delete_grade = "DELETE FROM grades WHERE enroll_eid = %s"
-                cursor.execute(delete_grade, (eid,))
-                # Then delete from enroll
-                delete_enroll = "DELETE FROM enroll WHERE eid = %s"
-                cursor.execute(delete_enroll, (eid,))
+                cursor.execute("INSERT INTO grades (enroll_eid) VALUES (%s)", (eid,))
                 conn.commit()
+            
+            url_subjid = form.getvalue("subjid", "")
+            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&success=Student enrolled successfully'
+            if url_subjid and url_subjid != selected_subjid:
+                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&success=Student enrolled successfully'
+            
+            print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            print(f"<!-- Drop error: {e} -->")
-        
-        # Get the URL parameters to preserve
-        url_subjid = form.getvalue("subjid", "")
-        redirect_url = f'students.py?studid={selected_studid}'
-        if url_subjid:
-            redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
-        
-        print(f"<script>window.location.href='{redirect_url}';</script>")
+            error_msg = f"Enrollment failed: {str(e)}"
+            redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
+    
+    elif subject_action == "drop" and selected_studid and selected_subjid:
+        try:
+            cursor.execute("SELECT eid FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid))
+            result = cursor.fetchone()
+            if result:
+                eid = result[0]
+                cursor.execute("DELETE FROM grades WHERE enroll_eid = %s", (eid,))
+                cursor.execute("DELETE FROM enroll WHERE eid = %s", (eid,))
+                conn.commit()
+                
+                url_subjid = form.getvalue("subjid", "")
+                redirect_url = f'students.py?studid={selected_studid}&success=Subject dropped successfully'
+                if url_subjid:
+                    redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&success=Subject dropped successfully'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+            else:
+                url_subjid = form.getvalue("subjid", "")
+                redirect_url = f'students.py?studid={selected_studid}&error=Student is not enrolled in this subject'
+                if url_subjid:
+                    redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&error=Student is not enrolled in this subject'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+        except Exception as e:
+            url_subjid = form.getvalue("subjid", "")
+            redirect_url = f'students.py?studid={selected_studid}'
+            if url_subjid:
+                redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
 
-    # Get all students with total units calculation
+    # Get all students
     cursor.execute("""
         SELECT s.studid, s.studname, s.studadd, s.studgender, s.studcrs, s.yrlvl, 
                COALESCE(SUM(sub.subjunits), 0) as total_units
@@ -191,35 +249,128 @@ try:
     """)
     students = cursor.fetchall()
 
-    # Get enrollment data if a student is selected (from URL parameter)
-    enrolled_subjects = []
-    enrolled_subject_ids = []  # List of subject IDs the student is already enrolled in
-    total_units_enrolled = 0
-    
     # Get URL parameters
     url_studid = form.getvalue("studid", "")
-    url_subjid = form.getvalue("subjid", "")  # Get subjid from URL
-    error_msg = form.getvalue("error", "")  # Get error message from URL if any
+    url_subjid = form.getvalue("subjid", "")
+    error_msg = form.getvalue("error", "")
+    success_msg = form.getvalue("success", "")
     
-    if url_studid:
-        selected_studid = url_studid  # Override with URL parameter
+    # Check for schedule conflicts - DIRECT SQL for display
+    conflict_detected = False
+    conflict_message = ""
+    
+    if url_studid and url_subjid:
+        cursor.execute("SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s", (url_studid, url_subjid))
+        already_enrolled = cursor.fetchone()[0] > 0
+        
+        if not already_enrolled:
+            # Get the schedule of the new subject
+            cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (url_subjid,))
+            new_subject = cursor.fetchone()
+            new_sched = new_subject[0] if new_subject else ""
+            
+            if new_sched and new_sched.strip():
+                # Get enrolled subjects for the student
+                cursor.execute("""
+                    SELECT s.subjsched 
+                    FROM subjects s
+                    INNER JOIN enroll e ON s.subjid = e.subjid 
+                    WHERE e.studid = %s AND s.subjsched IS NOT NULL AND s.subjsched != ''
+                """, (url_studid,))
+                enrolled_schedules = cursor.fetchall()
+                
+                # Parse new schedule
+                new_sched_clean = new_sched.strip()
+                
+                if len(new_sched_clean) >= 3:
+                    new_days = new_sched_clean[:3]
+                    
+                    # Find dash position
+                    dash_pos = new_sched_clean.find('-')
+                    if dash_pos != -1:
+                        # Get time part (after days)
+                        time_part = new_sched_clean[3:].strip()
+                        
+                        # Handle multiple spaces
+                        if ' ' in time_part:
+                            time_part = time_part.replace(' ', '')
+                        
+                        # Split start and end times
+                        if '-' in time_part:
+                            new_stime, new_etime = time_part.split('-')
+                            new_stime = new_stime.strip()
+                            new_etime = new_etime.strip()
+                            
+                            # Convert to minutes
+                            new_start_hour = int(new_stime[:2])
+                            new_start_min = int(new_stime[3:5])
+                            new_end_hour = int(new_etime[:2])
+                            new_end_min = int(new_etime[3:5])
+                            new_start_minutes = (new_start_hour * 60) + new_start_min
+                            new_end_minutes = (new_end_hour * 60) + new_end_min
+                            
+                            # Check each enrolled subject
+                            for enrolled in enrolled_schedules:
+                                old_sched = enrolled[0].strip() if enrolled[0] else ""
+                                
+                                if old_sched and len(old_sched) >= 3:
+                                    old_days = old_sched[:3]
+                                    
+                                    # Only check if same days
+                                    if old_days == new_days:
+                                        old_dash_pos = old_sched.find('-')
+                                        if old_dash_pos != -1:
+                                            # Get time part for old schedule
+                                            old_time_part = old_sched[3:].strip()
+                                            
+                                            # Handle multiple spaces
+                                            if ' ' in old_time_part:
+                                                old_time_part = old_time_part.replace(' ', '')
+                                            
+                                            if '-' in old_time_part:
+                                                old_stime, old_etime = old_time_part.split('-')
+                                                old_stime = old_stime.strip()
+                                                old_etime = old_etime.strip()
+                                                
+                                                # Convert to minutes
+                                                old_start_hour = int(old_stime[:2])
+                                                old_start_min = int(old_stime[3:5])
+                                                old_end_hour = int(old_etime[:2])
+                                                old_end_min = int(old_etime[3:5])
+                                                old_start_minutes = (old_start_hour * 60) + old_start_min
+                                                old_end_minutes = (old_end_hour * 60) + old_end_min
+                                                
+                                                # Check for time overlap
+                                                if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
+                                                    conflict_detected = True
+                                                    conflict_message = f"Conflict with {old_sched}"
+                                                    break
+        
         cursor.execute("""
             SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched 
             FROM enroll e 
             JOIN subjects s ON e.subjid = s.subjid 
             WHERE e.studid = %s
             ORDER BY s.subjid
-        """, (selected_studid,))
+        """, (url_studid,))
         enrolled_subjects = cursor.fetchall()
         
-        # Get list of enrolled subject IDs
         enrolled_subject_ids = [subject[0] for subject in enrolled_subjects]
-        
-        # Calculate total units for enrolled subjects
-        for subject in enrolled_subjects:
-            total_units_enrolled += subject[3] if subject[3] else 0
+    elif url_studid:
+        cursor.execute("""
+            SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched 
+            FROM enroll e 
+            JOIN subjects s ON e.subjid = s.subjid 
+            WHERE e.studid = %s
+            ORDER BY s.subjid
+        """, (url_studid,))
+        enrolled_subjects = cursor.fetchall()
+        enrolled_subject_ids = [subject[0] for subject in enrolled_subjects]
+    else:
+        enrolled_subjects = []
+        enrolled_subject_ids = []
 
-    # Pre-fill form if student ID is in URL
+    # Pre-fill form
     prefill_data = {}
     if url_studid:
         cursor.execute("SELECT studid, studname, studadd, studcrs, studgender, yrlvl FROM students WHERE studid = %s", (url_studid,))
@@ -239,16 +390,17 @@ try:
     <head>
         <title>Sumeru Akademiya - Student Enrollment System</title>
         <style>
-            @import url('https://fonts.cdnfonts.com/css/hywenhei');
+            * {
+                font-family: HYWenHei, sans-serif !important;
+            }
             
             body {
-                font-family: 'HYWenHei', sans-serif;
+                font-family: HYWenHei, sans-serif;
                 margin: 0;
                 padding: 0;
                 background-color: #f5f5f5;
             }
             
-            /* Blue Header - Top Left Alignment */
             .header {
                 background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
                 color: white;
@@ -313,7 +465,6 @@ try:
             }
             
             button {
-                font-family: 'HYWenHei', sans-serif;
                 background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
                 color: white;
                 border: none;
@@ -322,6 +473,7 @@ try:
                 cursor: pointer;
                 transition: all 0.3s ease;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                font-family: HYWenHei
             }
             
             button:hover {
@@ -358,7 +510,17 @@ try:
             
             .drop-button {
                 background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-                display: none;
+                padding: 12px 25px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                color: white;
+                cursor: pointer;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+                min-width: 300px;
+                border: none;
+                margin: 5px;
             }
             
             .drop-button:hover {
@@ -368,7 +530,6 @@ try:
             }
             
             input, select {
-                font-family: 'HYWenHei', sans-serif;
                 padding: 8px 12px;
                 border: 1px solid #ddd;
                 border-radius: 4px;
@@ -381,7 +542,6 @@ try:
                 box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2);
             }
             
-            /* Error Message Styles */
             .error-message {
                 background-color: #f8d7da;
                 color: #721c24;
@@ -393,9 +553,29 @@ try:
                 font-weight: bold;
             }
             
-            /* Table Styles */
+            .success-message {
+                background-color: #d4edda;
+                color: #155724;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #c3e6cb;
+                text-align: center;
+                font-weight: bold;
+            }
+            
+            .warning-message {
+                background-color: #fff3cd;
+                color: #856404;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #ffeaa7;
+                text-align: center;
+                font-weight: bold;
+            }
+            
             table {
-                font-family: 'HYWenHei', sans-serif;
                 border-collapse: collapse;
                 width: 100%;
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -483,49 +663,16 @@ try:
                 .two-column-layout {
                     grid-template-columns: 1fr;
                 }
-                
-                .header {
-                    flex-direction: column;
-                    align-items: flex-start;
-                    padding: 15px 20px;
-                }
-                
-                .header-left {
-                    margin-bottom: 15px;
-                }
-                
-                .logo {
-                    height: 60px;
-                    width: 60px;
-                    margin-right: 15px;
-                }
-                
-                .university-name {
-                    font-size: 24px;
-                }
-                
-                .enroll-green-button {
-                    min-width: 250px;
-                }
             }
         </style>
         <script>
             let selectedStudentId = null;
-            let selectedStudentData = null;
             let selectedEnrolledSubjectId = null;
             
             function selectStudent(studid, studname, studadd, studcrs, studgender, yrlvl) {
                 selectedStudentId = studid;
-                selectedStudentData = {
-                    name: studname,
-                    address: studadd,
-                    course: studcrs,
-                    gender: studgender,
-                    yrlvl: yrlvl
-                };
                 selectedEnrolledSubjectId = null;
                 
-                // Fill the form with student data WITHOUT refreshing
                 document.getElementById('studid').value = studid;
                 document.getElementById('studname').value = studname;
                 document.getElementById('studadd').value = studadd;
@@ -533,11 +680,9 @@ try:
                 document.getElementById('studgender').value = studgender;
                 document.getElementById('yrlvl').value = yrlvl;
                 
-                // Get current subjid from URL if it exists
                 const urlParams = new URLSearchParams(window.location.search);
                 const currentSubjid = urlParams.get('subjid');
                 
-                // Reload page to show enrolled subjects
                 let newUrl = 'students.py?studid=' + studid;
                 if (currentSubjid) {
                     newUrl += '&subjid=' + currentSubjid;
@@ -548,11 +693,9 @@ try:
             function selectEnrolledSubject(subjid, subjcode) {
                 selectedEnrolledSubjectId = subjid;
                 
-                // Remove previous selection
                 let rows = document.querySelectorAll('#enrolledSubjectsTable tr');
                 rows.forEach(row => row.classList.remove('selected-row'));
                 
-                // Highlight selected row
                 let rowsArray = Array.from(rows);
                 for (let row of rowsArray) {
                     let firstCell = row.querySelector('td:first-child');
@@ -562,11 +705,10 @@ try:
                     }
                 }
                 
-                // Show drop button ONLY if a subject is clicked
                 let dropButton = document.getElementById('dropButton');
                 if (dropButton && selectedStudentId && selectedEnrolledSubjectId) {
                     dropButton.style.display = 'block';
-                    dropButton.innerHTML = 'Drop Student ID: <span id="dropStudId">' + selectedStudentId + '</span> from Subject ID: <span id="dropSubjId">' + selectedEnrolledSubjectId + '</span>';
+                    dropButton.innerHTML = 'Drop Student ID: ' + selectedStudentId + ' from Subject ID: ' + selectedEnrolledSubjectId;
                     dropButton.disabled = false;
                 }
             }
@@ -607,14 +749,12 @@ try:
                     actionInput.value = 'enroll';
                     form.appendChild(actionInput);
                     
-                    // Also include the studid in URL parameter
                     let urlStudId = document.createElement('input');
                     urlStudId.type = 'hidden';
                     urlStudId.name = 'studid';
                     urlStudId.value = studid;
                     form.appendChild(urlStudId);
                     
-                    // Include subjid in URL parameter if it exists
                     const urlParams = new URLSearchParams(window.location.search);
                     const currentSubjid = urlParams.get('subjid');
                     if (currentSubjid) {
@@ -632,7 +772,6 @@ try:
             
             function dropSubject() {
                 if (selectedStudentId && selectedEnrolledSubjectId) {
-                    // No confirmation dialog - directly drop the subject
                     let form = document.createElement('form');
                     form.method = 'POST';
                     form.action = 'students.py';
@@ -655,14 +794,12 @@ try:
                     actionInput.value = 'drop';
                     form.appendChild(actionInput);
                     
-                    // Also include the studid in URL parameter
                     let urlStudId = document.createElement('input');
                     urlStudId.type = 'hidden';
                     urlStudId.name = 'studid';
                     urlStudId.value = selectedStudentId;
                     form.appendChild(urlStudId);
                     
-                    // Include subjid in URL parameter if it exists
                     const urlParams = new URLSearchParams(window.location.search);
                     const currentSubjid = urlParams.get('subjid');
                     if (currentSubjid) {
@@ -678,7 +815,6 @@ try:
                 }
             }
             
-            // Initialize selectedStudentId from URL on page load
             window.onload = function() {
                 const urlParams = new URLSearchParams(window.location.search);
                 const studid = urlParams.get('studid');
@@ -686,7 +822,6 @@ try:
                 
                 if (studid) {
                     selectedStudentId = studid;
-                    // Highlight the selected student row
                     let rows = document.querySelectorAll('#studentsTable tr');
                     for (let row of rows) {
                         let firstCell = row.querySelector('td:first-child');
@@ -697,9 +832,7 @@ try:
                     }
                 }
                 
-                // If there's a subjid in URL (from subjects.py), highlight it in enrolled subjects
                 if (subjid && studid) {
-                    // Highlight the specific subject row if it exists in enrolled subjects
                     let subjectRows = document.querySelectorAll('#enrolledSubjectsTable tr');
                     for (let row of subjectRows) {
                         let firstCell = row.querySelector('td:first-child');
@@ -707,11 +840,10 @@ try:
                             row.classList.add('selected-row');
                             selectedEnrolledSubjectId = subjid;
                             
-                            // Show drop button for this subject
                             let dropButton = document.getElementById('dropButton');
                             if (dropButton) {
                                 dropButton.style.display = 'block';
-                                dropButton.innerHTML = 'Drop Student ID: <span id="dropStudId">' + selectedStudentId + '</span> from Subject ID: <span id="dropSubjId">' + selectedEnrolledSubjectId + '</span>';
+                                dropButton.innerHTML = 'Drop Student ID: ' + selectedStudentId + ' from Subject ID: ' + selectedEnrolledSubjectId;
                                 dropButton.disabled = false;
                             }
                             break;
@@ -722,7 +854,6 @@ try:
         </script>
     </head>
     <body>
-        <!-- Blue Header with Universitas Magistorium and Genshin Impact Image - Top Left -->
         <div class="header">
             <div class="header-left">
                 <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
@@ -738,24 +869,29 @@ try:
         <div class="main-container">
     """)
 
-    # Display error message if there's a schedule conflict
     if error_msg:
+        error_display = html.unescape(error_msg)
         print(f"""
             <div class="error-message">
-                ⚠️ Schedule Conflict Detected: {html.unescape(error_msg)}
+                {error_display}
+            </div>
+        """)
+    
+    if success_msg:
+        print(f"""
+            <div class="success-message">
+                {html.unescape(success_msg)}
             </div>
         """)
 
     print("""
             <div class="two-column-layout">
-                <!-- Left column: Student Form -->
                 <div>
                     <div class="form-container">
                         <h2>Student Form</h2>
                         <form method="POST" action="students.py" id="studentForm">
     """)
 
-    # Add hidden field for subjid if it exists in URL
     if url_subjid:
         print(f"<input type='hidden' name='subjid' value='{url_subjid}'>")
 
@@ -796,40 +932,57 @@ try:
                         </form>
                     </div>
                     
-                    <!-- Enroll Section (below student form) - ONLY SHOW WHEN SUBJECT ID IS FROM subjects.py -->
                     <div class="enroll-section">
                         <h3>Enroll Student to Subject</h3>
     """)
 
-    # ONLY show enroll buttons if we have a subject ID from subjects.py
     if url_subjid:
-        # We have a specific subject ID from subjects.py
         if url_studid and prefill_data.get('studid'):
             studid = prefill_data.get('studid')
             
-            # Check if student is already enrolled in this specific subject
-            is_already_enrolled = int(url_subjid) in enrolled_subject_ids
+            try:
+                is_already_enrolled = int(url_subjid) in enrolled_subject_ids
+            except:
+                is_already_enrolled = False
             
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
                         <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Enroll Student to Subject:</p>
                     </div>""")
             
-            print("""<div class="enroll-buttons-container" style="justify-content: center;">""")
-            
-            if not is_already_enrolled:
-                # Show single button for the specific subject ID
-                print(f"""<button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button">
-                            Enroll Student ID: {studid} to Subject ID: {url_subjid}
-                        </button>""")
+            if conflict_detected:
+                print(f"""
+                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                        <div style="text-align: center; color: #dc3545; font-weight: bold;">
+                            {conflict_message}
+                        </div>
+                     </div>
+                    <button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                        Enroll Student ID: {studid} to Subject ID: {url_subjid}
+                    </button>
+                    </div>
+                    """)
+            elif is_already_enrolled:
+                print(f"""
+                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                        Student ID: {studid} is already enrolled in Subject ID: {url_subjid}
+                    </div>
+                    <button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                        Enroll Student ID: {studid} to Subject ID: {url_subjid}
+                    </button>
+                </div>
+                """)
             else:
-                print(f"""<p style="text-align: center; color: #28a745; padding: 10px; background-color: #f8f9fa; border-radius: 5px; width: 100%;">
-                            Student ID: {studid} is already enrolled in Subject ID: {url_subjid}
-                        </p>""")
-            
-            print("</div>")
+                print(f"""
+                <div class="enroll-buttons-container" style="justify-content: center;">
+                    <button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button">
+                        Enroll Student ID: {studid} to Subject ID: {url_subjid}
+                    </button>
+                </div>
+                """)
         
         elif not url_studid:
-            # Have subject ID but no student selected yet
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
                         <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Enroll Student to Subject:</p>
                     </div>""")
@@ -841,7 +994,6 @@ try:
             print("</div>")
     
     else:
-        # NO subject ID from subjects.py - DO NOT SHOW ENROLLMENT BUTTONS
         print("""<div style="text-align: center; padding: 20px;">
                     <p style="color: #666;">
                         To enroll students in subjects, go to Subjects page and select a subject first
@@ -852,11 +1004,9 @@ try:
                     </div>
                 </div>
                 
-                <!-- Right column: Students Table and Enrolled Subjects -->
                 <div>
-                    <!-- Students Table -->
                     <div class="form-container">
-                        <h2>Students Table</h2>
+                        <h2>Students Table for: enrollmentsystem</h2>
                         <table border="1" id="studentsTable">
                             <thead>
                                 <tr>
@@ -893,7 +1043,6 @@ try:
                         </table>
                     </div>
                     
-                    <!-- Enrolled Subjects Table -->
                     <div class="form-container" style="margin-top: 30px;">
                         <h2>Enrolled Subjects</h2>
                         <table border="1" id="enrolledSubjectsTable">
@@ -937,6 +1086,8 @@ try:
     </html>
     """)
 
-finally:
-    if 'conn' in locals():
-        conn.close()
+    cursor.close()
+    conn.close()
+
+except Exception as e:
+    print(f"<html><body><h1>Error</h1><p>{html.escape(str(e))}</p></body></html>")
