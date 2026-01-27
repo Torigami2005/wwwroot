@@ -62,103 +62,131 @@ CREATE TABLE IF NOT EXISTS grades(
 );
 
 
-
-
-
-DELIMITER $$
-
-CREATE PROCEDURE conflictsched(
-    IN studid INT, 
-    IN subjid INT, 
-    OUT result VARCHAR(100)
+CREATE DEFINER=`root`@`localhost` PROCEDURE `conflictsched`(
+    IN studid INT,
+    IN subjid INT,
+    OUT result VARCHAR(255)
 )
 BEGIN
     DECLARE new_sched TEXT;
-    DECLARE days VARCHAR(3);
-    DECLARE stime VARCHAR(5);
-    DECLARE etime VARCHAR(5);
+    DECLARE new_days VARCHAR(3);
+    DECLARE new_stime VARCHAR(5);
+    DECLARE new_etime VARCHAR(5);
     DECLARE old_sched TEXT;
-    DECLARE olddays VARCHAR(3);
-    DECLARE oldstime VARCHAR(5);
-    DECLARE oldetime VARCHAR(5);
-    DECLARE n INT;
+    DECLARE old_days VARCHAR(3);
+    DECLARE old_stime VARCHAR(5);
+    DECLARE old_etime VARCHAR(5);
     DECLARE i INT DEFAULT 1;
-    DECLARE conflict_found INT DEFAULT 0;
-    DECLARE conflict_msg VARCHAR(100) DEFAULT '';
+    DECLARE n INT;
+    DECLARE new_start_minutes INT;
+    DECLARE new_end_minutes INT;
+    DECLARE old_start_minutes INT;
+    DECLARE old_end_minutes INT;
+    DECLARE dash_position INT;
     
-    -- Create temporary table for enrolled subjects
-    DROP TEMPORARY TABLE IF EXISTS temp_table;
-    CREATE TEMPORARY TABLE temp_table (
+    -- Create temporary table
+    CREATE TEMPORARY TABLE IF NOT EXISTS enrolledsubj(
         id INT AUTO_INCREMENT PRIMARY KEY,
         subjsched TEXT
     );
     
-    -- Insert enrolled subjects into temp table
-    INSERT INTO temp_table (subjsched) 
-    SELECT s.subjsched 
-    FROM subjects s 
-    INNER JOIN enroll e ON s.subjid = e.subjid 
-    WHERE e.studid = studid;
+    -- Clear any existing data
+    DELETE FROM enrolledsubj;
+    
+    -- Get enrolled subjects for the student
+    INSERT INTO enrolledsubj(subjsched) 
+    SELECT subjsched 
+    FROM subjects 
+    INNER JOIN enroll ON subjects.subjid = enroll.subjid 
+    WHERE enroll.studid = studid;
     
     -- Get the schedule of the new subject
     SELECT subjsched INTO new_sched 
     FROM subjects 
-    WHERE subjid = subjid;
+    WHERE subjid = subjid
+    LIMIT 1;
     
-    -- Parse new schedule
-    SET days = LEFT(new_sched, 3);
-    SET stime = SUBSTRING(new_sched, 5, 5);
-    SET etime = SUBSTRING(new_sched, 11, 5);
-    
-    -- Get count of enrolled subjects
-    SELECT COUNT(*) INTO n FROM temp_table;
-    
-    -- Loop through enrolled subjects to check for conflicts
-    WHILE i <= n AND conflict_found = 0 DO
-        SELECT subjsched INTO old_sched FROM temp_table WHERE id = i;
-        
-        -- Parse old schedule
-        SET olddays = LEFT(old_sched, 3);
-        SET oldstime = SUBSTRING(old_sched, 5, 5);
-        SET oldetime = SUBSTRING(old_sched, 11, 5);
-        
-        -- Check for day overlap
-        IF (
-            -- Check if any day matches (M, T, W, TH, F, S)
-            INSTR(days, LEFT(olddays, 1)) > 0 OR
-            (LENGTH(days) >= 2 AND INSTR(days, MID(olddays, 2, 1)) > 0) OR
-            (LENGTH(days) >= 3 AND INSTR(days, MID(olddays, 3, 1)) > 0) OR
-            INSTR(olddays, LEFT(days, 1)) > 0 OR
-            (LENGTH(olddays) >= 2 AND INSTR(olddays, MID(days, 2, 1)) > 0) OR
-            (LENGTH(olddays) >= 3 AND INSTR(olddays, MID(days, 3, 1)) > 0)
-        ) THEN
-            -- Check for time overlap
-            IF (
-                -- New start time is between old time range
-                (stime >= oldstime AND stime < oldetime) OR
-                -- New end time is between old time range
-                (etime > oldstime AND etime <= oldetime) OR
-                -- New time range completely contains old time range
-                (stime <= oldstime AND etime >= oldetime)
-            ) THEN
-                SET conflict_found = 1;
-                SET conflict_msg = CONCAT('Conflict with ', old_sched);
-            END IF;
-        END IF;
-        
-        SET i = i + 1;
-    END WHILE;
-    
-    -- Set result
-    IF conflict_found = 1 THEN
-        SET result = conflict_msg;
-    ELSE
+    -- Check if new subject has a schedule
+    IF new_sched IS NULL OR TRIM(new_sched) = '' THEN
         SET result = 'No conflict';
+    ELSE
+        -- Extract schedule components with PROPER parsing for variable spacing
+        SET new_days = LEFT(TRIM(new_sched), 3);  -- First 3 chars are days
+        
+        -- Find the dash position to split times
+        SET dash_position = LOCATE('-', new_sched);
+        
+        -- Extract start time (from after days to before dash)
+        SET new_stime = TRIM(SUBSTRING(new_sched, 4, dash_position - 4));
+        
+        -- Extract end time (from after dash to end)
+        SET new_etime = TRIM(SUBSTRING(new_sched, dash_position + 1));
+        
+        -- Convert times to minutes
+        SET new_start_minutes = 
+            CAST(SUBSTRING(new_stime, 1, 2) AS UNSIGNED) * 60 + 
+            CAST(SUBSTRING(new_stime, 4, 2) AS UNSIGNED);
+        SET new_end_minutes = 
+            CAST(SUBSTRING(new_etime, 1, 2) AS UNSIGNED) * 60 + 
+            CAST(SUBSTRING(new_etime, 4, 2) AS UNSIGNED);
+        
+        -- Get count of enrolled subjects
+        SELECT COUNT(*) INTO n FROM enrolledsubj;
+        
+        SET result = 'No conflict';
+        
+        -- Check each enrolled subject for conflicts
+        WHILE i <= n DO
+            SELECT subjsched INTO old_sched 
+            FROM enrolledsubj 
+            WHERE id = i
+            LIMIT 1;
+            
+            -- Check if old subject has a schedule
+            IF old_sched IS NOT NULL AND TRIM(old_sched) != '' THEN
+                -- Extract schedule components for old subject
+                SET old_days = LEFT(TRIM(old_sched), 3);
+                
+                -- Find the dash position
+                SET dash_position = LOCATE('-', old_sched);
+                
+                -- Extract start time
+                SET old_stime = TRIM(SUBSTRING(old_sched, 4, dash_position - 4));
+                
+                -- Extract end time
+                SET old_etime = TRIM(SUBSTRING(old_sched, dash_position + 1));
+                
+                -- Convert times to minutes
+                SET old_start_minutes = 
+                    CAST(SUBSTRING(old_stime, 1, 2) AS UNSIGNED) * 60 + 
+                    CAST(SUBSTRING(old_stime, 4, 2) AS UNSIGNED);
+                SET old_end_minutes = 
+                    CAST(SUBSTRING(old_etime, 1, 2) AS UNSIGNED) * 60 + 
+                    CAST(SUBSTRING(old_etime, 4, 2) AS UNSIGNED);
+                
+                -- Check if schedules overlap (same days AND time ranges overlap)
+                IF new_days = old_days THEN
+                    -- Check for time overlap: NOT (new ends before old starts OR new starts after old ends)
+                    IF NOT (new_end_minutes <= old_start_minutes OR new_start_minutes >= old_end_minutes) THEN
+                        -- Return the conflicting schedule
+                        SET result = TRIM(old_sched);
+                        SET i = n + 1; -- Exit loop
+                    END IF;
+                END IF;
+            END IF;
+            
+            SET i = i + 1;
+        END WHILE;
     END IF;
     
-    -- Clean up
-    DROP TEMPORARY TABLE IF EXISTS temp_table;
-    
-END$$
+    -- Drop the temporary table
+    DROP TEMPORARY TABLE IF EXISTS enrolledsubj;
+END
 
-DELIMITER ;
+mysql> CREATE TABLE teacher_subjects (
+    ->     tid INT,
+    ->     subjid INT,
+    ->     FOREIGN KEY (tid) REFERENCES teachers(tid),
+    ->     FOREIGN KEY (subjid) REFERENCES subjects(subjid),
+    ->     PRIMARY KEY (tid, subjid)
+    -> );
