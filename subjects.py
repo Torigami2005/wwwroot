@@ -25,7 +25,7 @@ try:
 
     cursor = conn.cursor()
 
-    # Handle subject actions (Insert, Update, Delete)
+    # Handle subject actions (Insert, Update, Delete) ghe
     if action_type == "insert" and subjcode:
         try:
             # Get the maximum subjid and calculate the next one starting from 2000
