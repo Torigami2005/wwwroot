@@ -1,0 +1,30 @@
+conflictsched(in studid INT, in subjid INT, out result varchar(10))
+
+CREATE TEMPORARY TABLE  enrolledsubj(
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    subjsched TEXT
+);
+
+insert into enrolledsubj(subjsched) select subjsched from subjects inner join enroll on subjects.subjid=enroll.subjid where enroll.studid=studid;
+
+select subjsched into new_sched subjects where subjid=subjid;
+
+set days =  left(new_sched,3);
+set stime = substring(new_sched,5,5);
+set etime = substring(new_sched,11,5);
+
+select  count(*) into n from temp_table;
+
+while i < n do
+    select subjsched into old_sched from temp_table where id = i;
+    set days =  left(old_sched,3);
+    set stime = substring(old_sched,5,5);
+    set etime = substring(old_sched,11,5);
+set i = i + 1;
+
+while i < n do
+    select subjsched into old_sched from temp_table where id = i;
+    set olddays =  left(old_sched,3);
+    set oldstime = substring(old_sched,5,5);
+    set oldetime = substring(old_sched,11,5);
+set i = i + 1;
