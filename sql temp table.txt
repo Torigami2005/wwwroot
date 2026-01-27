@@ -1,6 +1,6 @@
 conflictsched(in studid INT, in subjid INT, out result varchar(10))
 
-CREATE TABLE  enrolledsubj(
+CREATE TEMPORARY TABLE  enrolledsubj(
     id INT AUTO_INCREMENT PRIMARY KEY,
     subjsched TEXT
 );

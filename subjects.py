@@ -24,101 +24,45 @@ try:
     )
 
     cursor = conn.cursor()
-    
-    # Variable to store conflict message
-    conflict_message = ""
 
     # Handle subject actions (Insert, Update, Delete)
     if action_type == "insert" and subjcode:
         try:
-            # First, check for schedule conflicts with existing subjects
-            # Get all existing subjects with the same schedule
-            check_conflict_sql = """
-                SELECT subjid, subjcode, subjsched 
-                FROM subjects 
-                WHERE subjsched = %s
-            """
-            cursor.execute(check_conflict_sql, (subjsched,))
-            conflicting_subjects = cursor.fetchall()
+            # Get the maximum subjid and calculate the next one starting from 2000
+            cursor.execute("SELECT MAX(subjid) FROM subjects")
+            result = cursor.fetchone()
+            max_subjid = result[0]
             
-            if conflicting_subjects:
-                # Found conflicts, show error message
-                conflict_list = []
-                for subject in conflicting_subjects:
-                    conflict_list.append(f"Subject ID: {subject[0]} - {subject[1]} ({subject[2]})")
-                
-                conflict_message = f"<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>"
-                conflict_message += "<strong>Schedule Conflict Detected!</strong><br>"
-                conflict_message += f"Schedule '{subjsched}' conflicts with:<br>"
-                conflict_message += "<ul>"
-                for conflict in conflict_list:
-                    conflict_message += f"<li>{conflict}</li>"
-                conflict_message += "</ul>"
-                conflict_message += "Please choose a different schedule.</div>"
+            # If no subjects exist yet, start from 2000
+            if max_subjid is None:
+                next_subjid = 2000
             else:
-                # No conflicts, proceed with insert
-                # Get the maximum subjid and calculate the next one starting from 2000
-                cursor.execute("SELECT MAX(subjid) FROM subjects")
-                result = cursor.fetchone()
-                max_subjid = result[0]
-                
-                # If no subjects exist yet, start from 2000
-                if max_subjid is None:
-                    next_subjid = 2000
-                else:
-                    # Find the next available ID starting from max(current_max + 1, 2000)
-                    next_subjid = max(max_subjid + 1, 2000)
-                
-                insert_sql = """
-                    INSERT INTO subjects (subjid, subjcode, subjdesc, subjunits, subjsched) 
-                    VALUES (%s, %s, %s, %s, %s)
-                """
-                cursor.execute(insert_sql, (next_subjid, subjcode, subjdesc, subjunits, subjsched))
-                conn.commit()
-                # Redirect to show the new subject in URL
-                print(f"<script>window.location.href='subjects.py?subjid={next_subjid}';</script>")
-                exit()
+                # Find the next available ID starting from max(current_max + 1, 2000)
+                next_subjid = max(max_subjid + 1, 2000)
+            
+            insert_sql = """
+                INSERT INTO subjects (subjid, subjcode, subjdesc, subjunits, subjsched) 
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.execute(insert_sql, (next_subjid, subjcode, subjdesc, subjunits, subjsched))
+            conn.commit()
+            # Redirect to show the new subject in URL
+            print(f"<script>window.location.href='subjects.py?subjid={next_subjid}';</script>")
         except Exception as e:
             print(f"<!-- Insert error: {e} -->")
             pass
     
     elif action_type == "update" and subjid and subjcode:
         try:
-            # Check for schedule conflicts (excluding the current subject)
-            check_conflict_sql = """
-                SELECT subjid, subjcode, subjsched 
-                FROM subjects 
-                WHERE subjsched = %s AND subjid != %s
+            update_sql = """
+                UPDATE subjects 
+                SET subjcode=%s, subjdesc=%s, subjunits=%s, subjsched=%s 
+                WHERE subjid=%s
             """
-            cursor.execute(check_conflict_sql, (subjsched, subjid))
-            conflicting_subjects = cursor.fetchall()
-            
-            if conflicting_subjects:
-                # Found conflicts, show error message
-                conflict_list = []
-                for subject in conflicting_subjects:
-                    conflict_list.append(f"Subject ID: {subject[0]} - {subject[1]} ({subject[2]})")
-                
-                conflict_message = f"<div style='background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #f5c6cb;'>"
-                conflict_message += "<strong>Schedule Conflict Detected!</strong><br>"
-                conflict_message += f"Schedule '{subjsched}' conflicts with:<br>"
-                conflict_message += "<ul>"
-                for conflict in conflict_list:
-                    conflict_message += f"<li>{conflict}</li>"
-                conflict_message += "</ul>"
-                conflict_message += "Please choose a different schedule.</div>"
-            else:
-                # No conflicts, proceed with update
-                update_sql = """
-                    UPDATE subjects 
-                    SET subjcode=%s, subjdesc=%s, subjunits=%s, subjsched=%s 
-                    WHERE subjid=%s
-                """
-                cursor.execute(update_sql, (subjcode, subjdesc, subjunits, subjsched, subjid))
-                conn.commit()
-                # Redirect to show updated subject in URL
-                print(f"<script>window.location.href='subjects.py?subjid={subjid}';</script>")
-                exit()
+            cursor.execute(update_sql, (subjcode, subjdesc, subjunits, subjsched, subjid))
+            conn.commit()
+            # Redirect to show updated subject in URL
+            print(f"<script>window.location.href='subjects.py?subjid={subjid}';</script>")
         except Exception as e:
             print(f"<!-- Update error: {e} -->")
     
@@ -128,13 +72,16 @@ try:
             delete_enrollments = "DELETE FROM enroll WHERE subjid=%s"
             cursor.execute(delete_enrollments, (subjid,))
             
+            # Then delete from teacher_subjects
+            delete_teacher_subjects = "DELETE FROM teacher_subjects WHERE subjid=%s"
+            cursor.execute(delete_teacher_subjects, (subjid,))
+            
             # Then delete the subject
             delete_sql = "DELETE FROM subjects WHERE subjid=%s"
             cursor.execute(delete_sql, (subjid,))
             conn.commit()
             # Redirect to main page
             print("<script>window.location.href='subjects.py';</script>")
-            exit()
         except Exception as e:
             print(f"<!-- Delete error: {e} -->")
 
@@ -151,9 +98,13 @@ try:
 
     # Get students enrolled in a specific subject (from URL parameter)
     enrolled_students = []
+    # Get teachers assigned to a specific subject (from URL parameter)
+    assigned_teachers = []
+    
     # Use URL parameter subjid if available
     url_subjid = form.getvalue("subjid", "")
     if url_subjid:
+        # Get enrolled students
         cursor.execute("""
             SELECT st.studid, st.studname, st.studadd, st.studgender, st.studcrs, st.yrlvl 
             FROM enroll e 
@@ -162,6 +113,16 @@ try:
             ORDER BY st.studid
         """, (url_subjid,))
         enrolled_students = cursor.fetchall()
+        
+        # Get assigned teachers
+        cursor.execute("""
+            SELECT t.tid, t.tname, t.tdept, t.tcontact, t.tstatus
+            FROM teacher_subjects ts 
+            JOIN teachers t ON ts.tid = t.tid 
+            WHERE ts.subjid = %s
+            ORDER BY t.tid
+        """, (url_subjid,))
+        assigned_teachers = cursor.fetchall()
 
     # Pre-fill form if subject ID is in URL
     prefill_data = {}
@@ -182,16 +143,17 @@ try:
     <head>
         <title>Sumeru Akademiya - Subject Management System</title>
         <style>
-            @import url('https://fonts.cdnfonts.com/css/hywenhei');
+            * {
+                font-family: HYWenHei, sans-serif !important;
+            }
             
             body {
-                font-family: 'HYWenHei', sans-serif;
+                font-family: HYWenHei, sans-serif;
                 margin: 0;
                 padding: 0;
                 background-color: #f5f5f5;
             }
             
-            /* Blue Header - Top Left Alignment */
             .header {
                 background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
                 color: white;
@@ -234,11 +196,6 @@ try:
                 margin-top: 3px;
             }
             
-            .nav-links {
-                display: flex;
-                gap: 15px;
-            }
-            
             .nav-link {
                 color: white;
                 text-decoration: none;
@@ -261,7 +218,6 @@ try:
             }
             
             button {
-                font-family: 'HYWenHei', sans-serif;
                 background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
                 color: white;
                 border: none;
@@ -270,6 +226,7 @@ try:
                 cursor: pointer;
                 transition: all 0.3s ease;
                 box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                font-family: HYWenHei
             }
             
             button:hover {
@@ -277,8 +234,55 @@ try:
                 box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
             }
             
+            button:disabled {
+                background: #cccccc;
+                cursor: not-allowed;
+                transform: none;
+                box-shadow: none;
+            }
+            
+            .enroll-green-button {
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                padding: 12px 25px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                color: white;
+                cursor: pointer;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+                min-width: 300px;
+                border: none;
+                margin: 5px;
+            }
+            
+            .enroll-green-button:hover:not(:disabled) {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            }
+            
+            .drop-button {
+                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                padding: 12px 25px;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                color: white;
+                cursor: pointer;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                transition: all 0.3s ease;
+                min-width: 300px;
+                border: none;
+                margin: 5px;
+            }
+            
+            .drop-button:hover {
+                background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(220, 53, 69, 0.2);
+            }
+            
             input, select {
-                font-family: 'HYWenHei', sans-serif;
                 padding: 8px 12px;
                 border: 1px solid #ddd;
                 border-radius: 4px;
@@ -291,9 +295,40 @@ try:
                 box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2);
             }
             
-            /* Table Styles */
+            .error-message {
+                background-color: #f8d7da;
+                color: #721c24;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #f5c6cb;
+                text-align: center;
+                font-weight: bold;
+            }
+            
+            .success-message {
+                background-color: #d4edda;
+                color: #155724;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #c3e6cb;
+                text-align: center;
+                font-weight: bold;
+            }
+            
+            .warning-message {
+                background-color: #fff3cd;
+                color: #856404;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 15px 0;
+                border: 1px solid #ffeaa7;
+                text-align: center;
+                font-weight: bold;
+            }
+            
             table {
-                font-family: 'HYWenHei', sans-serif;
                 border-collapse: collapse;
                 width: 100%;
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -322,6 +357,11 @@ try:
                 cursor: pointer;
             }
             
+            .selected-row {
+                background-color: rgba(42, 82, 152, 0.15) !important;
+                font-weight: bold;
+            }
+            
             tr:nth-child(even) {
                 background-color: #f9f9f9;
             }
@@ -345,41 +385,43 @@ try:
                 padding-bottom: 10px;
             }
             
+            .enroll-section {
+                background: white;
+                padding: 25px;
+                border-radius: 10px;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+                margin-top: 20px;
+            }
+            
+            .enroll-section h3 {
+                color: #1e3c72;
+                margin-top: 0;
+            }
+            
             .two-column-layout {
-                display: grid;
-                grid-template-columns: 1fr 1.5fr;
+                display: flex;
                 gap: 30px;
+            }
+            
+            .left-column {
+                flex: 1;
+            }
+            
+            .right-column {
+                flex: 2;
+            }
+            
+            .enroll-buttons-container {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 10px;
+                margin-top: 15px;
             }
             
             @media (max-width: 1024px) {
                 .two-column-layout {
-                    grid-template-columns: 1fr;
-                }
-                
-                .header {
                     flex-direction: column;
-                    align-items: flex-start;
-                    padding: 15px 20px;
-                }
-                
-                .header-left {
-                    margin-bottom: 15px;
-                }
-                
-                .logo {
-                    height: 60px;
-                    width: 60px;
-                    margin-right: 15px;
-                }
-                
-                .university-name {
-                    font-size: 24px;
-                }
-                
-                .nav-links {
-                    width: 100%;
-                    justify-content: flex-start;
-                    flex-wrap: wrap;
                 }
             }
         </style>
@@ -409,8 +451,7 @@ try:
                     for (let row of rows) {
                         let firstCell = row.querySelector('td:first-child');
                         if (firstCell && firstCell.textContent === subjid) {
-                            row.style.backgroundColor = 'rgba(42, 82, 152, 0.15)';
-                            row.style.fontWeight = 'bold';
+                            row.classList.add('selected-row');
                             break;
                         }
                     }
@@ -419,7 +460,6 @@ try:
         </script>
     </head>
     <body>
-        <!-- Blue Header with Universitas Magistorium and Genshin Impact Image - Top Left -->
         <div class="header">
             <div class="header-left">
                 <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
@@ -429,88 +469,63 @@ try:
                     <div class="subtitle">Subject Management System</div>
                 </div>
             </div>
-            <div class="nav-links">
+            <div>
                 <a href="students.py""" + (f"?subjid={url_subjid}" if url_subjid else "") + """" class="nav-link">Students</a>
-                <a href="teachers.py" class="nav-link">Teachers</a>
+                <a href="teachers.py""" + (f"?subjid={url_subjid}" if url_subjid else "") + """" class="nav-link">Teachers</a>
             </div>
         </div>
         
         <div class="main-container">
-    """)
-
-    # Display conflict message if there is one
-    if conflict_message:
-        print(conflict_message)
-
-    print("""
-            <!-- Two-column layout -->
-            <table width="100%" cellpadding="10">
-                <tr>
-                    <!-- Left column: Subject Form -->
-                    <td width="40%" valign="top">
-                        <div class="form-container">
-                            <h2>Subject Form</h2>
-                            <form method="POST" action="subjects.py" id="subjectForm">
-    """)
-
-    # Pre-fill the form with submitted values if there was a conflict
-    # This prevents losing user input when showing conflict message
-    if conflict_message and action_type in ["insert", "update"]:
-        prefill_data = {
-            'subjid': subjid or '',
-            'subjcode': subjcode or '',
-            'subjdesc': subjdesc or '',
-            'subjunits': subjunits or '',
-            'subjsched': subjsched or ''
-        }
-
-    print("""                                <table style="width: 100%;">
-                                    <tr>
-                                        <td>Subject ID:</td>
-                                        <td><input type="text" name="subjid" id="subjid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('subjid', '')}'" + """></td>
-                                    </tr>
-                                    <tr>
-                                        <td>Subject Code:</td>
-                                        <td><input type="text" name="subjcode" id="subjcode" style="width: 150px" value=""" + f"'{html.escape(str(prefill_data.get('subjcode', '')))}'" + """></td>
-                                    </tr>
-                                    <tr>
-                                        <td>Description:</td>
-                                        <td><input type="text" name="subjdesc" id="subjdesc" style="width: 200px" value=""" + f"'{html.escape(str(prefill_data.get('subjdesc', '')))}'" + """></td>
-                                    </tr>
-                                    <tr>
-                                        <td>Units:</td>
-                                        <td><input type="text" name="subjunits" id="subjunits" style="width: 100px" value=""" + f"'{str(prefill_data.get('subjunits', ''))}'" + """></td>
-                                    </tr>
-                                    <tr>
-                                        <td>Schedule:</td>
-                                        <td><input type="text" name="subjsched" id="subjsched" style="width: 150px" value=""" + f"'{html.escape(str(prefill_data.get('subjsched', '')))}'" + """></td>
-                                    </tr>
-                                    <tr>
-                                        <td colspan="2" style="text-align: center; padding-top: 20px;">
-                                            <button type="button" onclick="submitForm('insert')" style="width: 80px; margin: 0 5px;">Insert</button>
-                                            <button type="button" onclick="submitForm('update')" style="width: 80px; margin: 0 5px;">Update</button>
-                                            <button type="button" onclick="submitForm('delete')" style="width: 80px; margin: 0 5px;">Delete</button>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </form>
-                        </div>
-                    </td>
-                    
-                    <!-- Right column: Subjects Table and Enrolled Students -->
-                    <td width="60%" valign="top">
-                        <!-- Subjects Table -->
-                        <div class="form-container">
-                            <h2>Subjects Table</h2>
-                            <table border="1" width="100%" id="subjectsTable">
+            <div class="two-column-layout">
+                <div class="left-column">
+                    <div class="form-container">
+                        <h2>Subject Form</h2>
+                        <form method="POST" action="subjects.py" id="subjectForm">
+                            <table style="width: 100%;">
                                 <tr>
-                                    <th>ID</th>
-                                    <th>Code</th>
-                                    <th>Description</th>
-                                    <th>Units</th>
-                                    <th>Schedule</th>
-                                    <th>#Students</th>
+                                    <td>Subject ID:</td>
+                                    <td><input type="text" name="subjid" id="subjid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('subjid', '')}'" + """></td>
                                 </tr>
+                                <tr>
+                                    <td>Subject Code:</td>
+                                    <td><input type="text" name="subjcode" id="subjcode" style="width: 150px" value=""" + f"'{html.escape(str(prefill_data.get('subjcode', '')))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Description:</td>
+                                    <td><input type="text" name="subjdesc" id="subjdesc" style="width: 200px" value=""" + f"'{html.escape(str(prefill_data.get('subjdesc', '')))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Units:</td>
+                                    <td><input type="text" name="subjunits" id="subjunits" style="width: 100px" value=""" + f"'{str(prefill_data.get('subjunits', ''))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td>Schedule:</td>
+                                    <td><input type="text" name="subjsched" id="subjsched" style="width: 150px" value=""" + f"'{html.escape(str(prefill_data.get('subjsched', '')))}'" + """></td>
+                                </tr>
+                                <tr>
+                                    <td colspan="2" style="text-align: center; padding-top: 20px;">
+                                        <button type="button" onclick="submitForm('insert')" style="width: 80px; margin: 0 5px;">Insert</button>
+                                        <button type="button" onclick="submitForm('update')" style="width: 80px; margin: 0 5px;">Update</button>
+                                        <button type="button" onclick="submitForm('delete')" style="width: 80px; margin: 0 5px;">Delete</button>
+                                    </td>
+                                </tr>
+                            </table>
+                        </form>
+                    </div>
+                </div>
+                
+                <div class="right-column">
+                    <div class="form-container">
+                        <h2>Subjects Table for: enrollmentsystem</h2>
+                        <table border="1" id="subjectsTable">
+                            <tr>
+                                <th>ID</th>
+                                <th>Code</th>
+                                <th>Description</th>
+                                <th>Units</th>
+                                <th>Schedule</th>
+                                <th>#Students</th>
+                            </tr>
     """)
 
     for subject in subjects:
@@ -519,41 +534,40 @@ try:
                html.escape(str(subject[2])) + "\", \"" + 
                str(subject[3]) + "\", \"" +  # subjunits - don't escape integer
                html.escape(str(subject[4])) + "\")' style='cursor:pointer;'>")
-        print("<td align='center'>" + str(subject[0]) + "</td>")
-        print("<td align='center'>" + html.escape(str(subject[1])) + "</td>")
-        print("<td align='center'>" + html.escape(str(subject[2])) + "</td>")
-        print("<td align='center'>" + str(subject[3]) + "</td>")  # subjunits - don't escape
-        print("<td align='center'>" + html.escape(str(subject[4])) + "</td>")
-        print("<td align='center'>" + str(subject[5]) + "</td>")
+        print("<td>" + str(subject[0]) + "</td>")
+        print("<td>" + html.escape(str(subject[1])) + "</td>")
+        print("<td>" + html.escape(str(subject[2])) + "</td>")
+        print("<td>" + str(subject[3]) + "</td>")  # subjunits - don't escape
+        print("<td>" + html.escape(str(subject[4])) + "</td>")
+        print("<td>" + str(subject[5]) + "</td>")
         print("</tr>")
 
     print("""
-                            </table>
-                        </div>
-                        
-                        <!-- Enrolled Students Table -->
-                        <div class="form-container" style="margin-top: 30px;">
-                            <h2>Students Enrolled in Subject ID: """ + (str(url_subjid) if url_subjid else 'None Selected') + """</h2>
-                            <table border="1" width="100%" id="enrolledStudentsTable">
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Name</th>
-                                    <th>Address</th>
-                                    <th>Gender</th>
-                                    <th>Course</th>
-                                    <th>Year Level</th>
-                                </tr>
+                        </table>
+                    </div>
+                    
+                    <div class="form-container" style="margin-top: 30px;">
+                        <h2>Students Enrolled in Subject ID: """ + (str(url_subjid) if url_subjid else 'None Selected') + """</h2>
+                        <table border="1" id="enrolledStudentsTable">
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Address</th>
+                                <th>Gender</th>
+                                <th>Course</th>
+                                <th>Year Level</th>
+                            </tr>
     """)
 
     if enrolled_students:
         for student in enrolled_students:
             print("<tr>")
-            print("<td align='center'>" + str(student[0]) + "</td>")
-            print("<td align='center'>" + html.escape(str(student[1])) + "</td>")
-            print("<td align='center'>" + html.escape(str(student[2])) + "</td>")
-            print("<td align='center'>" + html.escape(str(student[3])) + "</td>")
-            print("<td align='center'>" + html.escape(str(student[4])) + "</td>")
-            print("<td align='center'>" + html.escape(str(student[5])) + "</td>")
+            print("<td>" + str(student[0]) + "</td>")
+            print("<td>" + html.escape(str(student[1])) + "</td>")
+            print("<td>" + html.escape(str(student[2])) + "</td>")
+            print("<td>" + html.escape(str(student[3])) + "</td>")
+            print("<td>" + html.escape(str(student[4])) + "</td>")
+            print("<td>" + html.escape(str(student[5])) + "</td>")
             print("</tr>")
     else:
         if url_subjid:
@@ -562,16 +576,48 @@ try:
             print("<tr><td colspan='6' align='center'>Select a subject from the table above to view enrolled students</td></tr>")
 
     print("""
-                            </table>
-                        </div>
-                    </td>
-                </tr>
-            </table>
+                        </table>
+                    </div>
+                    
+                    <div class="form-container" style="margin-top: 30px;">
+                        <h2>Teachers Assigned to Subject ID: """ + (str(url_subjid) if url_subjid else 'None Selected') + """</h2>
+                        <table border="1" id="assignedTeachersTable">
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Department</th>
+                                <th>Contact</th>
+                                <th>Status</th>
+                            </tr>
+    """)
+
+    if assigned_teachers:
+        for teacher in assigned_teachers:
+            print("<tr>")
+            print("<td>" + str(teacher[0]) + "</td>")
+            print("<td>" + html.escape(str(teacher[1])) + "</td>")
+            print("<td>" + html.escape(str(teacher[2])) + "</td>")
+            print("<td>" + html.escape(str(teacher[3])) + "</td>")
+            print("<td>" + html.escape(str(teacher[4])) + "</td>")
+            print("</tr>")
+    else:
+        if url_subjid:
+            print("<tr><td colspan='5' align='center'>No teachers assigned to this subject</td></tr>")
+        else:
+            print("<tr><td colspan='5' align='center'>Select a subject from the table above to view assigned teachers</td></tr>")
+
+    print("""
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
     </body>
     </html>
     """)
 
-finally:
-    if 'conn' in locals():
-        conn.close()
+    cursor.close()
+    conn.close()
+
+except Exception as e:
+    print(f"<html><body><h1>Error</h1><p>{html.escape(str(e))}</p></body></html>")
