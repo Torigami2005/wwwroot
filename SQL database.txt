@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS grades(
     FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
 );
 
+DELIMITER $$
 
 CREATE DEFINER=`root`@`localhost` PROCEDURE `conflictsched`(
     IN studid INT,
@@ -182,6 +183,8 @@ BEGIN
     -- Drop the temporary table
     DROP TEMPORARY TABLE IF EXISTS enrolledsubj;
 END
+
+DELIMITER ;
 
 mysql> CREATE TABLE teacher_subjects (
     ->     tid INT,
