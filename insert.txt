@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import cgi
+import mysql.connector
+import html
+
+print("Content-Type: text/html\n")
+
+form = cgi.FieldStorage()
+
+name = html.escape(form.getvalue("name", ""))
+age = form.getvalue("age", "")
+email = html.escape(form.getvalue("email", ""))
+
+try:
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="root",
+        database="sample"
+    )
+
+    cursor = conn.cursor()
+
+    insert_sql = "INSERT INTO users (name, age, email) VALUES (%s, %s, %s)"
+
+    cursor.execute(insert_sql, (name, age, email))
+    conn.commit()
+
+    cursor.execute("SELECT name, age, email FROM users")
+    rows = cursor.fetchall()
+
+    print("""
+    <html>
+    <head>
+    </head>
+    <body>
+        <h2>Users Table</h2>
+        <table border=1>
+            <tr>
+                <th>Name</th>
+                <th>Age</th>
+                <th>Email</th>
+            </tr>
+    """)
+
+    for i in range(len(rows)):
+        print("<tr>")
+        print("<td>" + html.escape(str(rows[i][0])) + "</td>")
+        print("<td>" + str(rows[i][1]) + "</td>")
+        print("<td>" + html.escape(str(rows[i][2])) + "</td>")
+        print("</tr>")
+
+    print("""
+        </table>
+    </body>
+    </html>
+    """)
+
+
+finally:
+    if 'conn' in locals():
+        conn.close()
