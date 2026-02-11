@@ -2,12 +2,189 @@
 import cgi
 import mysql.connector
 import html
+import sys
+import os
+import http.cookies
+from datetime import datetime
 
-print("Content-Type: text/html\n")
+print("Content-Type: text/html")
 
 form = cgi.FieldStorage()
 
-# Get form values
+# Handle logout first
+logout_action = form.getvalue("logout_action", "")
+if logout_action == "1":
+    print("Set-Cookie: session_id=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; HttpOnly")
+    print("Set-Cookie: username=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+    print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+    print("Set-Cookie: user_role=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+    print()
+    print("<script>window.location.href = 'index.py';</script>")
+    sys.exit()
+
+# Load cookies
+cookie_string = os.environ.get('HTTP_COOKIE', '')
+cookies = http.cookies.SimpleCookie()
+if cookie_string:
+    cookies.load(cookie_string)
+
+# Session check with RBAC
+is_logged_in = False
+username = ""
+database_name = ""
+user_role = ""
+is_admin = False
+is_teacher = False
+is_student = False
+
+if 'session_id' in cookies and 'username' in cookies:
+    session_id = cookies['session_id'].value
+    username = cookies['username'].value
+    database_name = cookies['database'].value if 'database' in cookies else ""
+    user_role = cookies['user_role'].value if 'user_role' in cookies else ""
+    
+    if session_id:
+        is_logged_in = True
+        is_admin = (user_role == "admin")
+        is_teacher = (user_role == "teacher")
+        is_student = (user_role == "student")
+
+print()
+
+if not is_logged_in:
+    print("<script>alert('Please login first');window.location.href = 'index.py';</script>")
+    sys.exit()
+
+if not database_name:
+    print("<script>alert('Please select a database first');window.location.href = 'index.py';</script>")
+    sys.exit()
+
+# SECURITY FUNCTION: Redirect students attempting unauthorized actions
+def redirect_student_security_action(action_type, assignment_action, is_student):
+    """Redirect student to index.py if attempting unauthorized actions"""
+    if is_student:
+        # Check for CRUD actions in teachers.py
+        if action_type in ["insert", "update", "delete"]:
+            return True
+        # Check for teacher-subject assignment actions
+        if assignment_action in ["assign", "unassign"]:
+            return True
+        # Check for database creation
+        if create_db_action == "1":
+            return True
+    return False
+
+# Create new semester database - ADMIN ONLY
+create_db_action = form.getvalue("create_db_action", "")
+semester_selection = form.getvalue("semester_selection", "")
+
+if create_db_action == "1":
+    if not is_admin:
+        print("<script>alert('Access Denied: Admin privileges required');window.location.href = 'teachers.py';</script>")
+        sys.exit()
+    
+    if semester_selection:
+        try:
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="root"
+            )
+            cursor = conn.cursor()
+
+            current_year = datetime.now().year
+            next_year = current_year + 1
+
+            if semester_selection == "1st":
+                new_db_name = f"1stsem_{current_year}_{next_year}"
+            elif semester_selection == "2nd":
+                new_db_name = f"2ndsem_{current_year}_{next_year}"
+            elif semester_selection == "summer":
+                new_db_name = f"summer_{current_year}_{next_year}"
+            else:
+                new_db_name = "enrollmentsystem"
+
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {new_db_name}")
+            cursor.execute(f"USE {new_db_name}")
+
+            # Create tables
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS students (
+                    studid INT PRIMARY KEY,
+                    studname VARCHAR(100) NOT NULL,
+                    studadd VARCHAR(200),
+                    studcrs VARCHAR(50),
+                    studgender VARCHAR(10),
+                    yrlvl VARCHAR(10)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS subjects (
+                    subjid INT PRIMARY KEY,
+                    subjcode VARCHAR(20) NOT NULL,
+                    subjdesc VARCHAR(100),
+                    subjunits INT,
+                    subjsched VARCHAR(50)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS enroll (
+                    eid INT AUTO_INCREMENT PRIMARY KEY,
+                    studid INT,
+                    subjid INT,
+                    FOREIGN KEY (studid) REFERENCES students(studid),
+                    FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS grades (
+                    gradeid INT AUTO_INCREMENT PRIMARY KEY,
+                    enroll_eid INT,
+                    grade DECIMAL(5,2),
+                    FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS teachers (
+                    tid INT PRIMARY KEY,
+                    tname VARCHAR(100) NOT NULL,
+                    tdept VARCHAR(50),
+                    tadd VARCHAR(200),
+                    tcontact VARCHAR(50),
+                    tstatus VARCHAR(20)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS teacher_subjects (
+                    tsid INT AUTO_INCREMENT PRIMARY KEY,
+                    tid INT,
+                    subjid INT,
+                    FOREIGN KEY (tid) REFERENCES teachers(tid),
+                    FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+                )
+            """)
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            session_id = cookies.get('session_id').value if cookies.get('session_id') else ""
+            print(f"Set-Cookie: session_id={session_id}; path=/; HttpOnly; SameSite=Lax")
+            print(f"Set-Cookie: username={username}; path=/; SameSite=Lax")
+            print(f"Set-Cookie: database={new_db_name}; path=/; SameSite=Lax")
+            print(f"Set-Cookie: user_role={user_role}; path=/; SameSite=Lax")
+            print()
+
+            print(f"<script>alert('New database \"{new_db_name}\" created successfully!');window.location.href = 'teachers.py?created=1';</script>")
+            sys.exit()
+
+        except Exception as e:
+            error_msg = f"Database creation failed: {str(e)}"
+            print()
+            print(f"<script>alert('{error_msg}');window.location.href = 'teachers.py';</script>")
+            sys.exit()
+
+# Form values
 action_type = form.getvalue("action_type", "")
 tid = form.getvalue("tid", "")
 tname = html.escape(form.getvalue("tname", ""))
@@ -16,342 +193,403 @@ tadd = html.escape(form.getvalue("tadd", ""))
 tcontact = html.escape(form.getvalue("tcontact", ""))
 tstatus = html.escape(form.getvalue("tstatus", ""))
 
-# For subject assignment
+# For teacher-subject assignment
 selected_tid = form.getvalue("selected_tid", "")
 selected_subjid = form.getvalue("selected_subjid", "")
-subject_action = form.getvalue("subject_action", "")
+assignment_action = form.getvalue("assignment_action", "")
+
+# URL parameters
+url_tid = form.getvalue("tid", "")
+url_subjid = form.getvalue("subjid", "")
+error_msg = form.getvalue("error", "")
+success_msg = form.getvalue("success", "")
+created_msg = form.getvalue("created", "")
+
+# SECURITY CHECK: Redirect students attempting unauthorized actions
+if redirect_student_security_action(action_type, assignment_action, is_student):
+    print()
+    print("<script>alert('Security Alert: Unauthorized action attempted. Redirecting to login.');window.location.href = 'index.py';</script>")
+    sys.exit()
+
+# RBAC Check for teacher CRUD operations - ADMIN ONLY
+if action_type in ["insert", "update", "delete"] and not is_admin:
+    print("<script>alert('Access Denied: Only administrators can modify teacher records');window.location.href = 'teachers.py';</script>")
+    sys.exit()
+
+# RBAC Check for assignment operations - ADMIN ONLY
+if assignment_action in ["assign", "unassign"] and not is_admin:
+    print("<script>alert('Access Denied: Only administrators can assign/unassign subjects to teachers');window.location.href = 'teachers.py';</script>")
+    sys.exit()
+
+def parse_time(time_str):
+    """Parse time string (HHMM or HH:MM) to minutes"""
+    try:
+        # Remove colons if present
+        time_str = time_str.replace(':', '')
+        
+        if len(time_str) == 3:  # Handle HMM format
+            hours = int(time_str[0])
+            minutes = int(time_str[1:3])
+        elif len(time_str) == 4:  # Handle HHMM format
+            hours = int(time_str[0:2])
+            minutes = int(time_str[2:4])
+        else:
+            return None
+            
+        return hours * 60 + minutes
+    except:
+        return None
+
+def check_teacher_schedule_conflict(cursor, teacher_id, subject_id):
+    """Check if assigning a teacher to a subject would create a schedule conflict with their other subjects"""
+    try:
+        # Get the schedule of the new subject
+        cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (subject_id,))
+        new_subject = cursor.fetchone()
+        if not new_subject or not new_subject[0]:
+            return None  # No schedule to check
+            
+        new_sched = new_subject[0].strip()
+        if not new_sched or len(new_sched) < 3:
+            return None
+            
+        # Parse new schedule (format: "MWF 0830-1000" or "MWF 08:30-10:00")
+        new_days = new_sched[:3].upper()
+        
+        # Find time part
+        time_part_start = 3
+        while time_part_start < len(new_sched) and new_sched[time_part_start] == ' ':
+            time_part_start += 1
+            
+        time_part = new_sched[time_part_start:].strip()
+        if '-' not in time_part:
+            return None
+            
+        new_stime_str, new_etime_str = time_part.split('-')
+        new_stime_str = new_stime_str.strip()
+        new_etime_str = new_etime_str.strip()
+        
+        new_start_minutes = parse_time(new_stime_str)
+        new_end_minutes = parse_time(new_etime_str)
+        
+        if new_start_minutes is None or new_end_minutes is None:
+            return None  # Invalid time format
+            
+        # Get other subjects assigned to this teacher
+        cursor.execute("""
+            SELECT s.subjcode, s.subjsched 
+            FROM subjects s 
+            INNER JOIN teacher_subjects ts ON s.subjid = ts.subjid 
+            WHERE ts.tid = %s 
+            AND s.subjsched IS NOT NULL 
+            AND s.subjsched != ''
+        """, (teacher_id,))
+        assigned_subjects = cursor.fetchall()
+        
+        # Check each assigned subject
+        for assigned_code, assigned_sched in assigned_subjects:
+            if assigned_sched and len(assigned_sched.strip()) >= 3:
+                old_sched = assigned_sched.strip()
+                old_days = old_sched[:3].upper()
+                
+                # Only check if same days
+                if old_days == new_days:
+                    # Parse old schedule
+                    old_time_part_start = 3
+                    while old_time_part_start < len(old_sched) and old_sched[old_time_part_start] == ' ':
+                        old_time_part_start += 1
+                    
+                    old_time_part = old_sched[old_time_part_start:].strip()
+                    if '-' not in old_time_part:
+                        continue
+                    
+                    old_stime_str, old_etime_str = old_time_part.split('-')
+                    old_stime_str = old_stime_str.strip()
+                    old_etime_str = old_etime_str.strip()
+                    
+                    old_start_minutes = parse_time(old_stime_str)
+                    old_end_minutes = parse_time(old_etime_str)
+                    
+                    if old_start_minutes is None or old_end_minutes is None:
+                        continue  # Skip invalid time format
+                    
+                    # Check for time overlap
+                    if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
+                        return f"Teacher schedule conflict with {assigned_code} ({old_sched})"
+                        
+    except Exception as e:
+        return f"Error checking teacher schedule: {str(e)}"
+    
+    return None  # No conflict
+
+def check_teacher_already_assigned(cursor, teacher_id, subject_id):
+    """Check if teacher is already assigned to this subject"""
+    try:
+        cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid = %s AND subjid = %s", (teacher_id, subject_id))
+        count = cursor.fetchone()[0]
+        return count > 0
+    except Exception as e:
+        return False
+
+def check_subject_already_assigned(cursor, subject_id):
+    """Check if subject already has a teacher assigned"""
+    try:
+        cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE subjid = %s", (subject_id,))
+        count = cursor.fetchone()[0]
+        return count > 0
+    except Exception as e:
+        return False
+
+def create_mysql_user_for_teacher(tid, tname, database_name):
+    """Create MySQL user for teacher with appropriate access to specific database"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Create username from tid + tname (remove spaces and special chars)
+        safe_name = ''.join(c for c in tname if c.isalnum() or c.isspace()).replace(' ', '').lower()
+        mysql_username = f"{tid}{safe_name}"
+        
+        # Password format: AdDU + name only (without ID)
+        mysql_password = f"AdDU{safe_name}"
+        
+        # Check if user already exists
+        cursor.execute("SELECT User FROM mysql.user WHERE User = %s", (mysql_username,))
+        user_exists = cursor.fetchone()
+        
+        if not user_exists:
+            # Create MySQL user with password AdDU + name
+            cursor.execute(f"CREATE USER '{mysql_username}'@'localhost' IDENTIFIED BY '{mysql_password}'")
+            
+        # Grant appropriate privileges for teachers
+        # Teachers need SELECT, INSERT, UPDATE on enroll and grades tables
+        cursor.execute(f"GRANT SELECT ON `{database_name}`.* TO '{mysql_username}'@'localhost'")
+        cursor.execute(f"GRANT SELECT, INSERT, UPDATE ON `{database_name}`.enroll TO '{mysql_username}'@'localhost'")
+        cursor.execute(f"GRANT SELECT, INSERT, UPDATE ON `{database_name}`.grades TO '{mysql_username}'@'localhost'")
+        cursor.execute("FLUSH PRIVILEGES")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, mysql_username, mysql_password
+    except Exception as e:
+        return False, None, None
+
+def delete_mysql_user_for_teacher(tid, tname):
+    """Delete MySQL user for teacher"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Create username from tid + tname (remove spaces and special chars)
+        safe_name = ''.join(c for c in tname if c.isalnum() or c.isspace()).replace(' ', '').lower()
+        mysql_username = f"{tid}{safe_name}"
+        
+        # Check if user exists
+        cursor.execute("SELECT User FROM mysql.user WHERE User = %s", (mysql_username,))
+        user_exists = cursor.fetchone()
+        
+        if user_exists:
+            # Drop user
+            cursor.execute(f"DROP USER '{mysql_username}'@'localhost'")
+            cursor.execute("FLUSH PRIVILEGES")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True
+    except Exception as e:
+        return False
 
 try:
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="root",
-        database="enrollmentsystem"
-    )
-
+    # Connect to MySQL database
+    # For non-admin users, extract name from username for password
+    if is_admin:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root",
+            database=database_name
+        )
+    else:
+        # Extract name from username (remove digits)
+        name_only = ''.join([c for c in username if not c.isdigit()])
+        mysql_password = f"AdDU{name_only}"
+        
+        try:
+            conn = mysql.connector.connect(
+                host="localhost",
+                user=username,
+                password=mysql_password,
+                database=database_name
+            )
+        except mysql.connector.Error as e:
+            print(f"<script>alert('Access Denied: Cannot connect to database');window.location.href = 'index.py';</script>")
+            sys.exit()
+    
     cursor = conn.cursor()
 
-    # Handle teacher actions
+    # Handle teacher actions (ADMIN ONLY - already checked above)
     if action_type == "insert" and tname:
         try:
             cursor.execute("SELECT MAX(tid) FROM teachers")
             result = cursor.fetchone()
             max_tid = result[0]
-            
             if max_tid is None:
                 next_tid = 3000
             else:
                 next_tid = max(max_tid + 1, 3000)
             
-            cursor.execute("INSERT INTO teachers (tid, tname, tdept, tadd, tcontact, tstatus) VALUES (%s, %s, %s, %s, %s, %s)", 
-                          (next_tid, tname, tdept, tadd, tcontact, tstatus))
+            cursor.execute(
+                "INSERT INTO teachers (tid, tname, tdept, tadd, tcontact, tstatus) VALUES (%s, %s, %s, %s, %s, %s)",
+                (next_tid, tname, tdept, tadd, tcontact, tstatus)
+            )
             conn.commit()
-            print(f"<script>window.location.href='teachers.py?tid={next_tid}';</script>")
+            
+            # Create MySQL user for this teacher
+            success, mysql_username, mysql_password = create_mysql_user_for_teacher(next_tid, tname, database_name)
+            
+            if success:
+                print(f"<script>alert('Teacher added successfully!\\nMySQL User Created:\\nUsername: {mysql_username}\\nPassword: {mysql_password}');window.location.href='teachers.py?tid={next_tid}';</script>")
+            else:
+                print(f"<script>alert('Teacher added but MySQL user creation failed');window.location.href='teachers.py?tid={next_tid}';</script>")
         except Exception as e:
             print(f"<script>window.location.href='teachers.py';</script>")
-    
     elif action_type == "update" and tid and tname:
         try:
-            cursor.execute("UPDATE teachers SET tname=%s, tdept=%s, tadd=%s, tcontact=%s, tstatus=%s WHERE tid=%s", 
-                          (tname, tdept, tadd, tcontact, tstatus, tid))
+            cursor.execute(
+                "UPDATE teachers SET tname=%s, tdept=%s, tadd=%s, tcontact=%s, tstatus=%s WHERE tid=%s",
+                (tname, tdept, tadd, tcontact, tstatus, tid)
+            )
             conn.commit()
             print(f"<script>window.location.href='teachers.py?tid={tid}';</script>")
         except Exception as e:
             print(f"<script>window.location.href='teachers.py?tid={tid}';</script>")
-    
     elif action_type == "delete" and tid:
         try:
-            # First check if teacher has any assigned subjects
-            cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid=%s", (tid,))
-            assigned_count = cursor.fetchone()[0]
+            # Get teacher name before deletion
+            cursor.execute("SELECT tname FROM teachers WHERE tid=%s", (tid,))
+            teacher_data = cursor.fetchone()
+            tname_for_deletion = teacher_data[0] if teacher_data else ""
             
-            if assigned_count > 0:
-                # Delete from teacher_subjects first
-                cursor.execute("DELETE FROM teacher_subjects WHERE tid=%s", (tid,))
-            
-            # Then delete teacher
+            # Delete from teacher_subjects first
+            cursor.execute("DELETE FROM teacher_subjects WHERE tid=%s", (tid,))
+            # Delete teacher
             cursor.execute("DELETE FROM teachers WHERE tid=%s", (tid,))
             conn.commit()
-            print("<script>window.location.href='teachers.py';</script>")
+            
+            # Delete MySQL user for this teacher
+            if tname_for_deletion:
+                delete_mysql_user_for_teacher(tid, tname_for_deletion)
+            
+            print(f"<script>window.location.href='teachers.py';</script>")
         except Exception as e:
-            print("<script>window.location.href='teachers.py';</script>")
+            print(f"<script>window.location.href='teachers.py?tid={tid}';</script>")
 
-    # Handle subject assignment
-    if subject_action == "assign" and selected_tid and selected_subjid:
+    # Handle teacher-subject assignment (ADMIN ONLY - already checked above)
+    if assignment_action == "assign" and selected_tid and selected_subjid:
         try:
-            # Check if teacher exists
             cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (selected_tid,))
             teacher_count = cursor.fetchone()[0]
-            
             cursor.execute("SELECT COUNT(*) FROM subjects WHERE subjid = %s", (selected_subjid,))
             subject_count = cursor.fetchone()[0]
-            
             if teacher_count == 0 or subject_count == 0:
                 error_msg = "Teacher or Subject not found"
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
-                exit()
+                sys.exit()
             
-            # Check if subject already assigned to another teacher
-            cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE subjid = %s", (selected_subjid,))
-            already_assigned = cursor.fetchone()[0]
-            
-            if already_assigned > 0:
-                error_msg = "Subject already assigned to another teacher"
+            # Check if teacher is already assigned to this subject
+            already_assigned = check_teacher_already_assigned(cursor, selected_tid, selected_subjid)
+            if already_assigned:
+                error_msg = "Teacher is already assigned to this subject"
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
-                exit()
+                sys.exit()
             
-            # Check for schedule conflicts
-            cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (selected_subjid,))
-            new_subject = cursor.fetchone()
-            new_sched = new_subject[0] if new_subject else ""
+            # Check if subject already has a teacher assigned
+            subject_assigned = check_subject_already_assigned(cursor, selected_subjid)
+            if subject_assigned:
+                error_msg = "Subject already has a teacher assigned"
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
             
-            if new_sched and new_sched.strip():
-                # Get assigned subjects for the teacher
-                cursor.execute("""
-                    SELECT s.subjsched 
-                    FROM subjects s
-                    INNER JOIN teacher_subjects ts ON s.subjid = ts.subjid 
-                    WHERE ts.tid = %s AND s.subjsched IS NOT NULL AND s.subjsched != ''
-                """, (selected_tid,))
-                assigned_schedules = cursor.fetchall()
-                
-                # Parse new schedule
-                new_sched_clean = new_sched.strip()
-                
-                if len(new_sched_clean) >= 3:
-                    new_days = new_sched_clean[:3]
-                    
-                    # Find dash position
-                    dash_pos = new_sched_clean.find('-')
-                    if dash_pos != -1:
-                        # Get time part (after days)
-                        time_part = new_sched_clean[3:].strip()
-                        
-                        # Handle multiple spaces
-                        if ' ' in time_part:
-                            time_part = time_part.replace(' ', '')
-                        
-                        # Split start and end times
-                        if '-' in time_part:
-                            new_stime, new_etime = time_part.split('-')
-                            new_stime = new_stime.strip()
-                            new_etime = new_etime.strip()
-                            
-                            # Convert to minutes
-                            new_start_hour = int(new_stime[:2])
-                            new_start_min = int(new_stime[3:5])
-                            new_end_hour = int(new_etime[:2])
-                            new_end_min = int(new_etime[3:5])
-                            new_start_minutes = (new_start_hour * 60) + new_start_min
-                            new_end_minutes = (new_end_hour * 60) + new_end_min
-                            
-                            # Check each assigned subject
-                            for assigned in assigned_schedules:
-                                old_sched = assigned[0].strip() if assigned[0] else ""
-                                
-                                if old_sched and len(old_sched) >= 3:
-                                    old_days = old_sched[:3]
-                                    
-                                    # Only check if same days
-                                    if old_days == new_days:
-                                        old_dash_pos = old_sched.find('-')
-                                        if old_dash_pos != -1:
-                                            # Get time part for old schedule
-                                            old_time_part = old_sched[3:].strip()
-                                            
-                                            # Handle multiple spaces
-                                            if ' ' in old_time_part:
-                                                old_time_part = old_time_part.replace(' ', '')
-                                            
-                                            if '-' in old_time_part:
-                                                old_stime, old_etime = old_time_part.split('-')
-                                                old_stime = old_stime.strip()
-                                                old_etime = old_etime.strip()
-                                                
-                                                # Convert to minutes
-                                                old_start_hour = int(old_stime[:2])
-                                                old_start_min = int(old_stime[3:5])
-                                                old_end_hour = int(old_etime[:2])
-                                                old_end_min = int(old_etime[3:5])
-                                                old_start_minutes = (old_start_hour * 60) + old_start_min
-                                                old_end_minutes = (old_end_hour * 60) + old_end_min
-                                                
-                                                # Check for time overlap
-                                                if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
-                                                    conflict_msg = f"Schedule conflict with {old_sched}"
-                                                    redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(conflict_msg)}'
-                                                    print(f"<script>window.location.href='{redirect_url}';</script>")
-                                                    conn.close()
-                                                    exit()
+            # Check for teacher schedule conflict
+            conflict_msg = check_teacher_schedule_conflict(cursor, selected_tid, selected_subjid)
+            if conflict_msg:
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(conflict_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
             
-            # Assign subject to teacher
             cursor.execute("INSERT INTO teacher_subjects (tid, subjid) VALUES (%s, %s)", (selected_tid, selected_subjid))
             conn.commit()
             
-            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Subject assigned successfully'
+            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Teacher assigned to subject successfully'
             print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
             error_msg = f"Assignment failed: {str(e)}"
             redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
-    
-    elif subject_action == "unassign" and selected_tid and selected_subjid:
+    elif assignment_action == "unassign" and selected_tid and selected_subjid:
         try:
             cursor.execute("DELETE FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
             conn.commit()
             
-            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Subject unassigned successfully'
+            redirect_url = f'teachers.py?tid={selected_tid}&success=Teacher unassigned from subject successfully'
+            if selected_subjid:
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Teacher unassigned from subject successfully'
             print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            error_msg = f"Unassignment failed: {str(e)}"
-            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+            redirect_url = f'teachers.py?tid={selected_tid}'
+            if selected_subjid:
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
 
-    # Get all teachers with subject count and total units
-    cursor.execute("""
-        SELECT t.tid, t.tname, t.tdept, t.tcontact, t.tstatus, 
-               COUNT(ts.subjid) as subject_count,
-               COALESCE(SUM(s.subjunits), 0) as total_units
-        FROM teachers t
-        LEFT JOIN teacher_subjects ts ON t.tid = ts.tid
-        LEFT JOIN subjects s ON ts.subjid = s.subjid
-        GROUP BY t.tid, t.tname, t.tdept, t.tcontact, t.tstatus
-        ORDER BY t.tid
-    """)
+    # Get all teachers
+    cursor.execute("SELECT tid, tname, tdept, tadd, tcontact, tstatus FROM teachers ORDER BY tid")
     teachers = cursor.fetchall()
 
-    # Get URL parameters
-    url_tid = form.getvalue("tid", "")
-    url_subjid = form.getvalue("subjid", "")
-    error_msg = form.getvalue("error", "")
-    success_msg = form.getvalue("success", "")
-    
-    # Check for schedule conflicts - for display
-    conflict_detected = False
-    conflict_message = ""
-    
-    if url_tid and url_subjid:
-        # Check if subject already assigned to this teacher
-        cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid = %s AND subjid = %s", (url_tid, url_subjid))
-        already_assigned = cursor.fetchone()[0] > 0
-        
-        # Check if subject assigned to another teacher
-        cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE subjid = %s AND tid != %s", (url_subjid, url_tid))
-        assigned_to_other = cursor.fetchone()[0] > 0
-        
-        if assigned_to_other:
-            conflict_detected = True
-            conflict_message = "Subject already assigned to another teacher"
-        elif not already_assigned:
-            # Check for schedule conflicts
-            cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (url_subjid,))
-            new_subject = cursor.fetchone()
-            new_sched = new_subject[0] if new_subject else ""
-            
-            if new_sched and new_sched.strip():
-                # Get assigned subjects for the teacher
-                cursor.execute("""
-                    SELECT s.subjsched 
-                    FROM subjects s
-                    INNER JOIN teacher_subjects ts ON s.subjid = ts.subjid 
-                    WHERE ts.tid = %s AND s.subjsched IS NOT NULL AND s.subjsched != ''
-                """, (url_tid,))
-                assigned_schedules = cursor.fetchall()
-                
-                # Parse new schedule
-                new_sched_clean = new_sched.strip()
-                
-                if len(new_sched_clean) >= 3:
-                    new_days = new_sched_clean[:3]
-                    
-                    # Find dash position
-                    dash_pos = new_sched_clean.find('-')
-                    if dash_pos != -1:
-                        # Get time part (after days)
-                        time_part = new_sched_clean[3:].strip()
-                        
-                        # Handle multiple spaces
-                        if ' ' in time_part:
-                            time_part = time_part.replace(' ', '')
-                        
-                        # Split start and end times
-                        if '-' in time_part:
-                            new_stime, new_etime = time_part.split('-')
-                            new_stime = new_stime.strip()
-                            new_etime = new_etime.strip()
-                            
-                            # Convert to minutes
-                            new_start_hour = int(new_stime[:2])
-                            new_start_min = int(new_stime[3:5])
-                            new_end_hour = int(new_etime[:2])
-                            new_end_min = int(new_etime[3:5])
-                            new_start_minutes = (new_start_hour * 60) + new_start_min
-                            new_end_minutes = (new_end_hour * 60) + new_end_min
-                            
-                            # Check each assigned subject
-                            for assigned in assigned_schedules:
-                                old_sched = assigned[0].strip() if assigned[0] else ""
-                                
-                                if old_sched and len(old_sched) >= 3:
-                                    old_days = old_sched[:3]
-                                    
-                                    # Only check if same days
-                                    if old_days == new_days:
-                                        old_dash_pos = old_sched.find('-')
-                                        if old_dash_pos != -1:
-                                            # Get time part for old schedule
-                                            old_time_part = old_sched[3:].strip()
-                                            
-                                            # Handle multiple spaces
-                                            if ' ' in old_time_part:
-                                                old_time_part = old_time_part.replace(' ', '')
-                                            
-                                            if '-' in old_time_part:
-                                                old_stime, old_etime = old_time_part.split('-')
-                                                old_stime = old_stime.strip()
-                                                old_etime = old_etime.strip()
-                                                
-                                                # Convert to minutes
-                                                old_start_hour = int(old_stime[:2])
-                                                old_start_min = int(old_stime[3:5])
-                                                old_end_hour = int(old_etime[:2])
-                                                old_end_min = int(old_etime[3:5])
-                                                old_start_minutes = (old_start_hour * 60) + old_start_min
-                                                old_end_minutes = (old_end_hour * 60) + old_end_min
-                                                
-                                                # Check for time overlap
-                                                if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
-                                                    conflict_detected = True
-                                                    conflict_message = f"Schedule conflict with {old_sched}"
-                                                    break
-        
-        # Get assigned subjects for this teacher
+    # Get assigned subjects for selected teacher
+    assigned_subjects = []
+    if url_tid:
         cursor.execute("""
             SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched 
             FROM teacher_subjects ts 
             JOIN subjects s ON ts.subjid = s.subjid 
-            WHERE ts.tid = %s
+            WHERE ts.tid = %s 
             ORDER BY s.subjid
         """, (url_tid,))
         assigned_subjects = cursor.fetchall()
-        assigned_subject_ids = [subject[0] for subject in assigned_subjects]
-    elif url_tid:
-        cursor.execute("""
-            SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched 
-            FROM teacher_subjects ts 
-            JOIN subjects s ON ts.subjid = s.subjid 
-            WHERE ts.tid = %s
-            ORDER BY s.subjid
-        """, (url_tid,))
-        assigned_subjects = cursor.fetchall()
-        assigned_subject_ids = [subject[0] for subject in assigned_subjects]
-    else:
-        assigned_subjects = []
-        assigned_subject_ids = []
+
+    # Get all available subjects for assignment
+    cursor.execute("SELECT subjid, subjcode, subjdesc, subjunits FROM subjects ORDER BY subjid")
+    all_subjects = cursor.fetchall()
+
+    # Check for schedule conflicts and assignment status - FOR DISPLAY
+    teacher_schedule_conflict = ""
+    teacher_already_assigned = False
+    subject_already_assigned = False
+    
+    if url_subjid and url_tid:
+        teacher_already_assigned = check_teacher_already_assigned(cursor, url_tid, url_subjid)
+        subject_already_assigned = check_subject_already_assigned(cursor, url_subjid)
+        if not teacher_already_assigned and not subject_already_assigned:
+            teacher_schedule_conflict = check_teacher_schedule_conflict(cursor, url_tid, url_subjid)
 
     # Pre-fill form
     prefill_data = {}
@@ -368,679 +606,688 @@ try:
                 'tstatus': teacher_data[5]
             }
 
-    print("""
+    # Determine role display
+    role_display = ""
+    if is_admin:
+        role_display = "Administrator"
+    elif is_teacher:
+        role_display = "Teacher"
+    elif is_student:
+        role_display = "Student"
+
+    # HTML output starts here
+    print(f"""
     <html>
     <head>
-        <title>Sumeru Akademiya - Teacher Management System</title>
-        <style>
-            * {
-                font-family: HYWenHei, sans-serif !important;
-            }
+    <title>Sumeru Akademiya - Teacher Management System</title>
+    <style>
+    * {{ font-family: HYWenHei, sans-serif !important; }}
+    body {{ font-family: HYWenHei, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
+    .header {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 15px 30px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: space-between; }}
+    .header-left {{ display: flex; align-items: center; }}
+    .logo {{ height: 70px; width: 70px; margin-right: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); }}
+    .university-info {{ display: flex; flex-direction: column; }}
+    .university-name {{ font-size: 28px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3); letter-spacing: 1px; line-height: 1.2; }}
+    .subtitle {{ font-size: 16px; opacity: 0.9; margin-top: 3px; }}
+    .nav-link {{ color: white; text-decoration: none; background-color: rgba(255, 255, 255, 0.2); padding: 8px 20px; border-radius: 20px; transition: all 0.3s ease; font-size: 14px; }}
+    .nav-link:hover {{ background-color: rgba(255, 255, 255, 0.3); transform: translateY(-2px); }}
+    .main-container {{ max-width: 1400px; margin: 30px auto; padding: 20px; }}
+    button {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); font-family: HYWenHei }}
+    button:hover {{ transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); }}
+    button:disabled {{ background: #cccccc; cursor: not-allowed; transform: none; box-shadow: none; opacity: 0.6; }}
+    .assign-green-button {{ background: linear-gradient(135deg, #28a745 0%, #20c997 100%); padding: 12px 25px; font-size: 16px; font-weight: bold; border-radius: 8px; color: white; cursor: pointer; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); transition: all 0.3s ease; min-width: 300px; border: none; margin: 5px; }}
+    .assign-green-button:hover:not(:disabled) {{ transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); }}
+    .unassign-button {{ background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 12px 25px; font-size: 16px; font-weight: bold; border-radius: 8px; color: white; cursor: pointer; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); transition: all 0.3s ease; min-width: 300px; border: none; margin: 5px; }}
+    .unassign-button:hover:not(:disabled) {{ background: linear-gradient(135deg, #c82333 0%, #bd2130 100%); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(220, 53, 69, 0.2); }}
+    .logout-button {{ background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%); padding: 10px 20px; font-size: 14px; border-radius: 5px; color: white; cursor: pointer; transition: all 0.3s ease; border: none; }}
+    .logout-button:hover {{ background: linear-gradient(135deg, #5a6268 0%, #4e555b 100%); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(108, 117, 125, 0.2); }}
+    .semester-selection {{ display: flex; gap: 10px; margin-top: 10px; justify-content: center; }}
+    .semester-btn {{ padding: 10px 20px; background: linear-gradient(135deg, #6f42c1 0%, #6610f2 100%); color: white; border: none; border-radius: 5px; cursor: pointer; transition: all 0.3s ease; }}
+    .semester-btn:hover:not(:disabled) {{ transform: translateY(-2px); box-shadow: 0 4px 8px rgba(111, 66, 193, 0.3); }}
+    input, select {{ padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }}
+    input:focus, select:focus {{ outline: none; border-color: #2a5298; box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2); }}
+    input:disabled, select:disabled {{ background-color: #f5f5f5; cursor: not-allowed; }}
+    .error-message {{ background-color: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #f5c6cb; text-align: center; font-weight: bold; }}
+    .success-message {{ background-color: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #c3e6cb; text-align: center; font-weight: bold; }}
+    .warning-message {{ background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #ffeaa7; text-align: center; font-weight: bold; }}
+    .info-message {{ background-color: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #bee5eb; text-align: center; font-weight: bold; }}
+    table {{ border-collapse: collapse; width: 100%; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); border-radius: 8px; overflow: hidden; }}
+    th {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 12px 15px; text-align: center; font-weight: bold; font-size: 16px; }}
+    td {{ padding: 12px 15px; border-bottom: 1px solid #e0e0e0; text-align: center; transition: background-color 0.2s ease; }}
+    tr:hover {{ background-color: rgba(42, 82, 152, 0.05); cursor: pointer; }}
+    .selected-row {{ background-color: rgba(42, 82, 152, 0.15) !important; font-weight: bold; }}
+    tr:nth-child(even) {{ background-color: #f9f9f9; }}
+    tr:nth-child(even):hover {{ background-color: rgba(42, 82, 152, 0.08); }}
+    .form-container {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); margin-bottom: 30px; }}
+    .form-container h2 {{ color: #1e3c72; margin-top: 0; border-bottom: 2px solid #1e3c72; padding-bottom: 10px; }}
+    .enroll-section {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); margin-top: 20px; }}
+    .enroll-section h3 {{ color: #1e3c72; margin-top: 0; }}
+    .two-column-layout {{ display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; }}
+    .enroll-buttons-container {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 15px; }}
+    .create-db-section {{ 
+        background: white; 
+        padding: 25px; 
+        border-radius: 10px; 
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); 
+        margin-bottom: 30px; 
+        text-align: center;
+        border: 2px dashed #1e3c72;
+    }}
+    .create-db-section h3 {{ 
+        color: #1e3c72; 
+        margin-top: 0; 
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+    }}
+    .create-db-section h3::before {{
+        content: "folder";
+        font-size: 24px;
+    }}
+    .db-create-select {{ 
+        padding: 12px 20px;
+        border: 2px solid #1e3c72;
+        border-radius: 8px;
+        font-size: 16px;
+        background: white;
+        color: #1e3c72;
+        cursor: pointer;
+        min-width: 200px;
+        font-family: HYWenHei;
+        margin: 0 10px;
+        display: inline-block;
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        background-image: url('data:image/svg+xml;utf8,<svg fill="%231e3c72" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/><path d="M0 0h24v24H0z" fill="none"/></svg>');
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        padding-right: 40px;
+    }}
+    .db-create-select:focus {{
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.2);
+    }}
+    .db-create-action {{
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 24px;
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-family: HYWenHei;
+        font-size: 16px;
+        font-weight: bold;
+        text-decoration: none;
+        margin-left: 15px;
+    }}
+    .db-create-action:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(30, 60, 114, 0.3);
+    }}
+    .db-create-action::before {{
+        content: "+";
+        font-size: 18px;
+    }}
+    
+    .form-table {{
+        width: 100%;
+    }}
+    
+    .form-table td {{
+        padding: 10px 0;
+        text-align: left;
+    }}
+    
+    .form-table td:first-child {{
+        width: 120px;
+        font-weight: bold;
+    }}
+    
+    .button-container {{
+        text-align: center;
+        padding-top: 20px;
+    }}
+    
+    .action-button {{
+        width: 80px;
+        margin: 0 5px;
+    }}
+    
+    .role-badge {{
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+        margin-left: 10px;
+    }}
+    
+    .admin-badge {{
+        background-color: #dc3545;
+        color: white;
+    }}
+    
+    .teacher-badge {{
+        background-color: #007bff;
+        color: white;
+    }}
+    
+    .student-badge {{
+        background-color: #28a745;
+        color: white;
+    }}
+    
+    @media (max-width: 1024px) {{
+        .two-column-layout {{
+            grid-template-columns: 1fr;
+        }}
+    }}
+    </style>
+    <script>
+    let selectedTeacherId = null;
+    let selectedAssignedSubjectId = null;
+    let isAdmin = {str(is_admin).lower()};
+    let isTeacher = {str(is_teacher).lower()};
+    let isStudent = {str(is_student).lower()};
+    
+    function selectTeacher(tid, tname, tdept, tadd, tcontact, tstatus) {{
+        selectedTeacherId = tid;
+        selectedAssignedSubjectId = null;
+        document.getElementById('tid').value = tid;
+        document.getElementById('tname').value = tname;
+        document.getElementById('tdept').value = tdept;
+        document.getElementById('tadd').value = tadd;
+        document.getElementById('tcontact').value = tcontact;
+        document.getElementById('tstatus').value = tstatus;
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentSubjid = urlParams.get('subjid');
+        let newUrl = 'teachers.py?tid=' + tid;
+        if (currentSubjid) {{
+            newUrl += '&subjid=' + currentSubjid;
+        }}
+        window.location.href = newUrl;
+    }}
+    
+    function selectAssignedSubject(subjid, subjcode) {{
+        selectedAssignedSubjectId = subjid;
+        let rows = document.querySelectorAll('#assignedSubjectsTable tr');
+        rows.forEach(row => row.classList.remove('selected-row'));
+        let rowsArray = Array.from(rows);
+        for (let row of rowsArray) {{
+            let firstCell = row.querySelector('td:first-child');
+            if (firstCell && firstCell.textContent === subjid) {{
+                row.classList.add('selected-row');
+                break;
+            }}
+        }}
+        
+        let unassignButton = document.getElementById('unassignButton');
+        if (unassignButton && selectedTeacherId && selectedAssignedSubjectId) {{
+            unassignButton.style.display = 'block';
+            unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
+            unassignButton.disabled = !isAdmin;
+        }}
+    }}
+    
+    function submitForm(action) {{
+        if (isStudent) {{
+            alert('Security Alert: Students cannot modify teacher records.');
+            window.location.href = 'index.py';
+            return false;
+        }}
+        if (!isAdmin) {{
+            alert('Access Denied: Only administrators can modify teacher records');
+            return false;
+        }}
+        let form = document.getElementById('teacherForm');
+        let actionInput = document.createElement('input');
+        actionInput.type = 'hidden';
+        actionInput.name = 'action_type';
+        actionInput.value = action;
+        form.appendChild(actionInput);
+        
+        form.submit();
+    }}
+    
+    function assignTeacher(subjid) {{
+        if (isStudent) {{
+            alert('Security Alert: Students cannot assign subjects to teachers.');
+            window.location.href = 'index.py';
+            return false;
+        }}
+        if (!isAdmin) {{
+            alert('Access Denied: Only administrators can assign subjects to teachers');
+            return false;
+        }}
+        let tid = document.getElementById('tid').value;
+        if (tid && subjid) {{
+            let form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'teachers.py';
             
-            body {
-                font-family: HYWenHei, sans-serif;
-                margin: 0;
-                padding: 0;
-                background-color: #f5f5f5;
-            }
+            let tidInput = document.createElement('input');
+            tidInput.type = 'hidden';
+            tidInput.name = 'selected_tid';
+            tidInput.value = tid;
+            form.appendChild(tidInput);
             
-            .header {
-                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-                color: white;
-                padding: 15px 30px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-            }
+            let subjidInput = document.createElement('input');
+            subjidInput.type = 'hidden';
+            subjidInput.name = 'selected_subjid';
+            subjidInput.value = subjid;
+            form.appendChild(subjidInput);
             
-            .header-left {
-                display: flex;
-                align-items: center;
-            }
+            let actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'assignment_action';
+            actionInput.value = 'assign';
+            form.appendChild(actionInput);
             
-            .logo {
-                height: 70px;
-                width: 70px;
-                margin-right: 20px;
-                border-radius: 8px;
-                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-            }
+            let urlTid = document.createElement('input');
+            urlTid.type = 'hidden';
+            urlTid.name = 'tid';
+            urlTid.value = tid;
+            form.appendChild(urlTid);
             
-            .university-info {
-                display: flex;
-                flex-direction: column;
-            }
+            const urlParams = new URLSearchParams(window.location.search);
+            const currentSubjid = urlParams.get('subjid');
+            if (currentSubjid) {{
+                let urlSubjId = document.createElement('input');
+                urlSubjId.type = 'hidden';
+                urlSubjId.name = 'subjid';
+                urlSubjId.value = currentSubjid;
+                form.appendChild(urlSubjId);
+            }}
             
-            .university-name {
-                font-size: 28px;
-                font-weight: bold;
-                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-                letter-spacing: 1px;
-                line-height: 1.2;
-            }
+            document.body.appendChild(form);
+            form.submit();
+        }}
+    }}
+    
+    function unassignSubject() {{
+        if (isStudent) {{
+            alert('Security Alert: Students cannot unassign teachers from subjects.');
+            window.location.href = 'index.py';
+            return false;
+        }}
+        if (!isAdmin) {{
+            alert('Access Denied: Only administrators can unassign teachers from subjects');
+            return false;
+        }}
+        if (selectedTeacherId && selectedAssignedSubjectId) {{
+            let form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'teachers.py';
             
-            .subtitle {
-                font-size: 16px;
-                opacity: 0.9;
-                margin-top: 3px;
-            }
+            let tidInput = document.createElement('input');
+            tidInput.type = 'hidden';
+            tidInput.name = 'selected_tid';
+            tidInput.value = selectedTeacherId;
+            form.appendChild(tidInput);
             
-            .nav-link {
-                color: white;
-                text-decoration: none;
-                background-color: rgba(255, 255, 255, 0.2);
-                padding: 8px 20px;
-                border-radius: 20px;
-                transition: all 0.3s ease;
-                font-size: 14px;
-            }
+            let subjidInput = document.createElement('input');
+            subjidInput.type = 'hidden';
+            subjidInput.name = 'selected_subjid';
+            subjidInput.value = selectedAssignedSubjectId;
+            form.appendChild(subjidInput);
             
-            .nav-link:hover {
-                background-color: rgba(255, 255, 255, 0.3);
-                transform: translateY(-2px);
-            }
+            let actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'assignment_action';
+            actionInput.value = 'unassign';
+            form.appendChild(actionInput);
             
-            .main-container {
-                max-width: 1400px;
-                margin: 30px auto;
-                padding: 20px;
-            }
+            let urlTid = document.createElement('input');
+            urlTid.type = 'hidden';
+            urlTid.name = 'tid';
+            urlTid.value = selectedTeacherId;
+            form.appendChild(urlTid);
             
-            button {
-                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
-                cursor: pointer;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                font-family: HYWenHei
-            }
+            const urlParams = new URLSearchParams(window.location.search);
+            const currentSubjid = urlParams.get('subjid');
+            if (currentSubjid) {{
+                let urlSubjId = document.createElement('input');
+                urlSubjId.type = 'hidden';
+                urlSubjId.name = 'subjid';
+                urlSubjId.value = currentSubjid;
+                form.appendChild(urlSubjId);
+            }}
             
-            button:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
-            }
+            document.body.appendChild(form);
+            form.submit();
+        }}
+    }}
+    
+    function createDatabase() {{
+        if (!isAdmin) {{
+            alert('Access Denied: Only administrators can create databases');
+            return false;
+        }}
+        let semester = document.getElementById('semesterSelect').value;
+        if (!semester) {{
+            alert('Please select a semester first');
+            return;
+        }}
+        if (confirm('Are you sure you want to create a new ' + semester + ' semester database? This will create a fresh database with all necessary tables.')) {{
+            let form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'teachers.py';
             
-            button:disabled {
-                background: #cccccc;
-                cursor: not-allowed;
-                transform: none;
-                box-shadow: none;
-            }
+            let createDbInput = document.createElement('input');
+            createDbInput.type = 'hidden';
+            createDbInput.name = 'create_db_action';
+            createDbInput.value = '1';
+            form.appendChild(createDbInput);
             
-            .enroll-green-button {
-                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-                padding: 12px 25px;
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 8px;
-                color: white;
-                cursor: pointer;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                transition: all 0.3s ease;
-                min-width: 300px;
-                border: none;
-                margin: 5px;
-            }
+            let semesterInput = document.createElement('input');
+            semesterInput.type = 'hidden';
+            semesterInput.name = 'semester_selection';
+            semesterInput.value = semester;
+            form.appendChild(semesterInput);
             
-            .enroll-green-button:hover:not(:disabled) {
-                transform: translateY(-2px);
-                box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
-            }
+            document.body.appendChild(form);
+            form.submit();
+        }}
+    }}
+    
+    function logout() {{
+        if (confirm('Are you sure you want to logout?')) {{
+            let form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'teachers.py';
             
-            .drop-button {
-                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-                padding: 12px 25px;
-                font-size: 16px;
-                font-weight: bold;
-                border-radius: 8px;
-                color: white;
-                cursor: pointer;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                transition: all 0.3s ease;
-                min-width: 300px;
-                border: none;
-                margin: 5px;
-            }
+            let logoutInput = document.createElement('input');
+            logoutInput.type = 'hidden';
+            logoutInput.name = 'logout_action';
+            logoutInput.value = '1';
+            form.appendChild(logoutInput);
             
-            .drop-button:hover {
-                background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
-                transform: translateY(-2px);
-                box-shadow: 0 6px 12px rgba(220, 53, 69, 0.2);
-            }
-            
-            input, select {
-                padding: 8px 12px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 14px;
-            }
-            
-            input:focus, select:focus {
-                outline: none;
-                border-color: #2a5298;
-                box-shadow: 0 0 0 2px rgba(42, 82, 152, 0.2);
-            }
-            
-            .error-message {
-                background-color: #f8d7da;
-                color: #721c24;
-                padding: 15px;
-                border-radius: 5px;
-                margin: 15px 0;
-                border: 1px solid #f5c6cb;
-                text-align: center;
-                font-weight: bold;
-            }
-            
-            .success-message {
-                background-color: #d4edda;
-                color: #155724;
-                padding: 15px;
-                border-radius: 5px;
-                margin: 15px 0;
-                border: 1px solid #c3e6cb;
-                text-align: center;
-                font-weight: bold;
-            }
-            
-            .warning-message {
-                background-color: #fff3cd;
-                color: #856404;
-                padding: 15px;
-                border-radius: 5px;
-                margin: 15px 0;
-                border: 1px solid #ffeaa7;
-                text-align: center;
-                font-weight: bold;
-            }
-            
-            table {
-                border-collapse: collapse;
-                width: 100%;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-                border-radius: 8px;
-                overflow: hidden;
-            }
-            
-            th {
-                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-                color: white;
-                padding: 12px 15px;
-                text-align: center;
-                font-weight: bold;
-                font-size: 16px;
-            }
-            
-            td {
-                padding: 12px 15px;
-                border-bottom: 1px solid #e0e0e0;
-                text-align: center;
-                transition: background-color 0.2s ease;
-            }
-            
-            tr:hover {
-                background-color: rgba(42, 82, 152, 0.05);
-                cursor: pointer;
-            }
-            
-            .selected-row {
-                background-color: rgba(42, 82, 152, 0.15) !important;
-                font-weight: bold;
-            }
-            
-            tr:nth-child(even) {
-                background-color: #f9f9f9;
-            }
-            
-            tr:nth-child(even):hover {
-                background-color: rgba(42, 82, 152, 0.08);
-            }
-            
-            .form-container {
-                background: white;
-                padding: 25px;
-                border-radius: 10px;
-                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-                margin-bottom: 30px;
-            }
-            
-            .form-container h2 {
-                color: #1e3c72;
-                margin-top: 0;
-                border-bottom: 2px solid #1e3c72;
-                padding-bottom: 10px;
-            }
-            
-            .enroll-section {
-                background: white;
-                padding: 25px;
-                border-radius: 10px;
-                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
-                margin-top: 20px;
-            }
-            
-            .enroll-section h3 {
-                color: #1e3c72;
-                margin-top: 0;
-            }
-            
-            .two-column-layout {
-                display: grid;
-                grid-template-columns: 1fr 1.5fr;
-                gap: 30px;
-            }
-            
-            .enroll-buttons-container {
-                display: flex;
-                flex-wrap: wrap;
-                justify-content: center;
-                gap: 10px;
-                margin-top: 15px;
-            }
-            
-            @media (max-width: 1024px) {
-                .two-column-layout {
-                    grid-template-columns: 1fr;
-                }
-            }
-        </style>
-        <script>
-            let selectedTeacherId = null;
-            let selectedAssignedSubjectId = null;
-            
-            function selectTeacher(tid, tname, tdept, tadd, tcontact, tstatus) {
-                selectedTeacherId = tid;
-                selectedAssignedSubjectId = null;
-                
-                document.getElementById('tid').value = tid;
-                document.getElementById('tname').value = tname;
-                document.getElementById('tdept').value = tdept;
-                document.getElementById('tadd').value = tadd;
-                document.getElementById('tcontact').value = tcontact;
-                document.getElementById('tstatus').value = tstatus;
-                
-                const urlParams = new URLSearchParams(window.location.search);
-                const currentSubjid = urlParams.get('subjid');
-                
-                let newUrl = 'teachers.py?tid=' + tid;
-                if (currentSubjid) {
-                    newUrl += '&subjid=' + currentSubjid;
-                }
-                window.location.href = newUrl;
-            }
-            
-            function selectAssignedSubject(subjid, subjcode) {
-                selectedAssignedSubjectId = subjid;
-                
-                let rows = document.querySelectorAll('#assignedSubjectsTable tr');
-                rows.forEach(row => row.classList.remove('selected-row'));
-                
-                let rowsArray = Array.from(rows);
-                for (let row of rowsArray) {
-                    let firstCell = row.querySelector('td:first-child');
-                    if (firstCell && firstCell.textContent === subjid) {
-                        row.classList.add('selected-row');
-                        break;
-                    }
-                }
-                
-                let unassignButton = document.getElementById('unassignButton');
-                if (unassignButton && selectedTeacherId && selectedAssignedSubjectId) {
-                    unassignButton.style.display = 'block';
-                    unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
-                    unassignButton.disabled = false;
-                }
-            }
-            
-            function submitForm(action) {
-                let form = document.getElementById('teacherForm');
-                let actionInput = document.createElement('input');
-                actionInput.type = 'hidden';
-                actionInput.name = 'action_type';
-                actionInput.value = action;
-                form.appendChild(actionInput);
-                form.submit();
-            }
-            
-            function assignSubject(subjid) {
-                let tid = document.getElementById('tid').value;
-                
-                if (tid && subjid) {
-                    let form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = 'teachers.py';
-                    
-                    let tidInput = document.createElement('input');
-                    tidInput.type = 'hidden';
-                    tidInput.name = 'selected_tid';
-                    tidInput.value = tid;
-                    form.appendChild(tidInput);
-                    
-                    let subjidInput = document.createElement('input');
-                    subjidInput.type = 'hidden';
-                    subjidInput.name = 'selected_subjid';
-                    subjidInput.value = subjid;
-                    form.appendChild(subjidInput);
-                    
-                    let actionInput = document.createElement('input');
-                    actionInput.type = 'hidden';
-                    actionInput.name = 'subject_action';
-                    actionInput.value = 'assign';
-                    form.appendChild(actionInput);
-                    
-                    let urlTid = document.createElement('input');
-                    urlTid.type = 'hidden';
-                    urlTid.name = 'tid';
-                    urlTid.value = tid;
-                    form.appendChild(urlTid);
-                    
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const currentSubjid = urlParams.get('subjid');
-                    if (currentSubjid) {
-                        let urlSubjId = document.createElement('input');
-                        urlSubjId.type = 'hidden';
-                        urlSubjId.name = 'subjid';
-                        urlSubjId.value = currentSubjid;
-                        form.appendChild(urlSubjId);
-                    }
-                    
-                    document.body.appendChild(form);
-                    form.submit();
-                }
-            }
-            
-            function unassignSubject() {
-                if (selectedTeacherId && selectedAssignedSubjectId) {
-                    let form = document.createElement('form');
-                    form.method = 'POST';
-                    form.action = 'teachers.py';
-                    
-                    let tidInput = document.createElement('input');
-                    tidInput.type = 'hidden';
-                    tidInput.name = 'selected_tid';
-                    tidInput.value = selectedTeacherId;
-                    form.appendChild(tidInput);
-                    
-                    let subjidInput = document.createElement('input');
-                    subjidInput.type = 'hidden';
-                    subjidInput.name = 'selected_subjid';
-                    subjidInput.value = selectedAssignedSubjectId;
-                    form.appendChild(subjidInput);
-                    
-                    let actionInput = document.createElement('input');
-                    actionInput.type = 'hidden';
-                    actionInput.name = 'subject_action';
-                    actionInput.value = 'unassign';
-                    form.appendChild(actionInput);
-                    
-                    let urlTid = document.createElement('input');
-                    urlTid.type = 'hidden';
-                    urlTid.name = 'tid';
-                    urlTid.value = selectedTeacherId;
-                    form.appendChild(urlTid);
-                    
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const currentSubjid = urlParams.get('subjid');
-                    if (currentSubjid) {
-                        let urlSubjId = document.createElement('input');
-                        urlSubjId.type = 'hidden';
-                        urlSubjId.name = 'subjid';
-                        urlSubjId.value = currentSubjid;
-                        form.appendChild(urlSubjId);
-                    }
-                    
-                    document.body.appendChild(form);
-                    form.submit();
-                }
-            }
-            
-            window.onload = function() {
-                const urlParams = new URLSearchParams(window.location.search);
-                const tid = urlParams.get('tid');
-                const subjid = urlParams.get('subjid');
-                
-                if (tid) {
-                    selectedTeacherId = tid;
-                    let rows = document.querySelectorAll('#teachersTable tr');
-                    for (let row of rows) {
-                        let firstCell = row.querySelector('td:first-child');
-                        if (firstCell && firstCell.textContent === tid) {
-                            row.classList.add('selected-row');
-                            break;
-                        }
-                    }
-                }
-                
-                if (subjid && tid) {
-                    let subjectRows = document.querySelectorAll('#assignedSubjectsTable tr');
-                    for (let row of subjectRows) {
-                        let firstCell = row.querySelector('td:first-child');
-                        if (firstCell && firstCell.textContent === subjid) {
-                            row.classList.add('selected-row');
-                            selectedAssignedSubjectId = subjid;
-                            
-                            let unassignButton = document.getElementById('unassignButton');
-                            if (unassignButton) {
-                                unassignButton.style.display = 'block';
-                                unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
-                                unassignButton.disabled = false;
-                            }
-                            break;
-                        }
-                    }
-                }
-            };
-        </script>
+            document.body.appendChild(form);
+            form.submit();
+        }}
+    }}
+    
+    window.onload = function() {{
+        const urlParams = new URLSearchParams(window.location.search);
+        const tid = urlParams.get('tid');
+        const subjid = urlParams.get('subjid');
+        
+        if (tid) {{
+            selectedTeacherId = tid;
+            let rows = document.querySelectorAll('#teachersTable tr');
+            for (let row of rows) {{
+                let firstCell = row.querySelector('td:first-child');
+                if (firstCell && firstCell.textContent === tid) {{
+                    row.classList.add('selected-row');
+                    break;
+                }}
+            }}
+        }}
+        
+        if (subjid && tid) {{
+            let subjectRows = document.querySelectorAll('#assignedSubjectsTable tr');
+            for (let row of subjectRows) {{
+                let firstCell = row.querySelector('td:first-child');
+                if (firstCell && firstCell.textContent === subjid) {{
+                    row.classList.add('selected-row');
+                    selectedAssignedSubjectId = subjid;
+                    let unassignButton = document.getElementById('unassignButton');
+                    if (unassignButton) {{
+                        unassignButton.style.display = 'block';
+                        unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
+                        unassignButton.disabled = !isAdmin;
+                    }}
+                    break;
+                }}
+            }}
+        }}
+    }};
+    </script>
     </head>
     <body>
-        <div class="header">
-            <div class="header-left">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" 
-                     alt="Genshin Impact Logo" class="logo">
-                <div class="university-info">
-                    <div class="university-name">Sumeru Akademiya</div>
-                    <div class="subtitle">Teacher Management System</div>
-                </div>
+    <div class="header">
+        <div class="header-left">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" alt="Genshin Impact Logo" class="logo">
+            <div class="university-info">
+                <div class="university-name">Sumeru Akademiya</div>
+                <div class="subtitle">Teacher Management System</div>
+                <div class="subtitle">Database: {database_name} | User: {username} <span class="role-badge { 'admin-badge' if is_admin else 'teacher-badge' if is_teacher else 'student-badge' }">{role_display}</span></div>
             </div>
-            <a href="subjects.py""" + (f"?subjid={url_subjid}" if url_subjid else "") + """" class="nav-link">Go to Subjects</a>
         </div>
-        
-        <div class="main-container">
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <a href="students.py{f"?subjid={url_subjid}" if url_subjid else ""}" class="nav-link">Go to Students</a>
+            <a href="subjects.py{f"?subjid={url_subjid}" if url_subjid else ""}" class="nav-link">Go to Subjects</a>
+            <button onclick="logout()" class="logout-button">Logout</button>
+        </div>
+    </div>
+    <div class="main-container">
     """)
 
     if error_msg:
         error_display = html.unescape(error_msg)
         print(f"""
-            <div class="error-message">
-                {error_display}
-            </div>
+        <div class="error-message">
+            {error_display}
+        </div>
         """)
-    
     if success_msg:
         print(f"""
-            <div class="success-message">
-                {html.unescape(success_msg)}
+        <div class="success-message">
+            {html.unescape(success_msg)}
+        </div>
+        """)
+    if created_msg:
+        print(f"""
+        <div class="success-message">
+            Database created successfully! You are now using the new database.
+        </div>
+        """)
+
+    # Show role info message for non-admins
+    if not is_admin:
+        print(f"""
+        <div class="info-message">
+            You are logged in as {role_display}. You have read-only access to this page.
+        </div>
+        """)
+
+    # Create Database Section - Show only for admins
+    if is_admin:
+        print(f"""
+        <div class="create-db-section">
+            <h3>Create New Semester Database</h3>
+            <p>Create a fresh database for a new semester. This will create all necessary tables.</p>
+            <div class="semester-selection">
+                <select id="semesterSelect" class="db-create-select">
+                    <option value="">-- Select Semester --</option>
+                    <option value="1st">1st Semester</option>
+                    <option value="2nd">2nd Semester</option>
+                    <option value="summer">Summer</option>
+                </select>
+                <a href="#" onclick="createDatabase()" class="db-create-action">Create Database</a>
             </div>
+            <p style="margin-top: 15px; color: #666; font-size: 14px;">
+                Current Database: <strong>{database_name}</strong>
+            </p>
+        </div>
         """)
 
     print("""
-            <div class="two-column-layout">
-                <div>
-                    <div class="form-container">
-                        <h2>Teacher Form</h2>
-                        <form method="POST" action="teachers.py" id="teacherForm">
+    <div class="two-column-layout">
+        <div>
+            <div class="form-container">
+                <h2>Teacher Form</h2>
+                <form method="POST" action="teachers.py" id="teacherForm">
     """)
-
     if url_subjid:
         print(f"<input type='hidden' name='subjid' value='{url_subjid}'>")
-
-    print("""
-                            <table style="width: 100%;">
-                                <tr>
-                                    <td>Teacher ID:</td>
-                                    <td><input type="text" name="tid" id="tid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('tid', '')}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td>Name:</td>
-                                    <td><input type="text" name="tname" id="tname" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('tname', ''))}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td>Department:</td>
-                                    <td><input type="text" name="tdept" id="tdept" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('tdept', ''))}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td>Address:</td>
-                                    <td><input type="text" name="tadd" id="tadd" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('tadd', ''))}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td>Contact:</td>
-                                    <td><input type="text" name="tcontact" id="tcontact" style="width: 150px" value=""" + f"'{html.escape(prefill_data.get('tcontact', ''))}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td>Status:</td>
-                                    <td><input type="text" name="tstatus" id="tstatus" style="width: 100px" value=""" + f"'{html.escape(prefill_data.get('tstatus', ''))}'" + """></td>
-                                </tr>
-                                <tr>
-                                    <td colspan="2" style="text-align: center; padding-top: 20px;">
-                                        <button type="button" onclick="submitForm('insert')" style="width: 80px; margin: 0 5px;">Insert</button>
-                                        <button type="button" onclick="submitForm('update')" style="width: 80px; margin: 0 5px;">Update</button>
-                                        <button type="button" onclick="submitForm('delete')" style="width: 80px; margin: 0 5px;">Delete</button>
-                                    </td>
-                                </tr>
-                            </table>
-                        </form>
-                    </div>
-                    
-                    <div class="enroll-section">
-                        <h3>Assign Subject to Teacher</h3>
+    
+    # Disable form inputs for non-admins
+    disabled_attr = "" if is_admin else "disabled"
+    
+    print(f"""
+                    <table style="width: 100%;">
+                        <tr>
+                            <td>Teacher ID:</td>
+                            <td><input type="text" name="tid" id="tid" style="width: 100px" readonly value='{prefill_data.get("tid", "")}'></td>
+                        </tr>
+                        <tr>
+                            <td>Name:</td>
+                            <td><input type="text" name="tname" id="tname" style="width: 200px" value='{html.escape(prefill_data.get("tname", ""))}' {disabled_attr}></td>
+                        </tr>
+                        <tr>
+                            <td>Department:</td>
+                            <td><input type="text" name="tdept" id="tdept" style="width: 150px" value='{html.escape(prefill_data.get("tdept", ""))}' {disabled_attr}></td>
+                        </tr>
+                        <tr>
+                            <td>Address:</td>
+                            <td><input type="text" name="tadd" id="tadd" style="width: 200px" value='{html.escape(prefill_data.get("tadd", ""))}' {disabled_attr}></td>
+                        </tr>
+                        <tr>
+                            <td>Contact:</td>
+                            <td><input type="text" name="tcontact" id="tcontact" style="width: 150px" value='{html.escape(prefill_data.get("tcontact", ""))}' {disabled_attr}></td>
+                        </tr>
+                        <tr>
+                            <td>Status:</td>
+                            <td><input type="text" name="tstatus" id="tstatus" style="width: 100px" value='{html.escape(prefill_data.get("tstatus", ""))}' {disabled_attr}></td>
+                        </tr>
+                        <tr>
+                            <td colspan="2" style="text-align: center; padding-top: 20px;">
+                                <button type="button" onclick="submitForm('insert')" style="width: 80px; margin: 0 5px;" {disabled_attr}>Insert</button>
+                                <button type="button" onclick="submitForm('update')" style="width: 80px; margin: 0 5px;" {disabled_attr}>Update</button>
+                                <button type="button" onclick="submitForm('delete')" style="width: 80px; margin: 0 5px;" {disabled_attr}>Delete</button>
+                            </td>
+                        </tr>
+                    </table>
+                </form>
+            </div>
+            
+            <div class="enroll-section">
+                <h3>Assign Teacher to Subject</h3>
     """)
-
     if url_subjid:
         if url_tid and prefill_data.get('tid'):
-            teacher_id = prefill_data.get('tid')
-            
-            try:
-                is_already_assigned = int(url_subjid) in assigned_subject_ids
-            except:
-                is_already_assigned = False
-            
+            tid = prefill_data.get('tid')
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
-                        <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Subject to Teacher:</p>
-                    </div>""")
+                <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Teacher to Subject:</p>
+            </div>""")
             
-            if conflict_detected:
+            # Check various assignment conditions
+            if teacher_already_assigned:
+                print(f"""
+                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                        Teacher ID: {tid} is already assigned to Subject ID: {url_subjid}
+                    </div>
+                    <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
+                    </button>
+                </div>
+                """)
+            elif subject_already_assigned:
+                print(f"""
+                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                        Subject ID: {url_subjid} already has a teacher assigned
+                    </div>
+                    <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
+                    </button>
+                </div>
+                """)
+            elif teacher_schedule_conflict:
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
                     <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
                         <div style="text-align: center; color: #dc3545; font-weight: bold;">
-                            {conflict_message}
+                            {teacher_schedule_conflict}
                         </div>
-                     </div>
-                    <button type="button" onclick="assignSubject('{url_subjid}')" class="enroll-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
-                        Assign Teacher ID: {teacher_id} to Subject ID: {url_subjid}
-                    </button>
                     </div>
-                    """)
-            elif is_already_assigned:
-                print(f"""
-                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
-                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
-                        Teacher ID: {teacher_id} already assigned to Subject ID: {url_subjid}
-                    </div>
-                    <button type="button" onclick="assignSubject('{url_subjid}')" class="enroll-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
-                        Assign Teacher ID: {teacher_id} to Subject ID: {url_subjid}
+                    <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
                     </button>
                 </div>
                 """)
             else:
+                button_disabled = "" if is_admin else "disabled"
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center;">
-                    <button type="button" onclick="assignSubject('{url_subjid}')" class="enroll-green-button">
-                        Assign Teacher ID: {teacher_id} to Subject ID: {url_subjid}
+                    <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" {button_disabled}>
+                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
                     </button>
                 </div>
                 """)
-        
         elif not url_tid:
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
-                        <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Subject to Teacher:</p>
-                    </div>""")
-            
+                <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Teacher to Subject:</p>
+            </div>""")
             print("""<div class="enroll-buttons-container" style="justify-content: center;">""")
             print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
-                        Select a teacher from the table to assign Subject ID: {url_subjid}
-                    </p>""")
+                Select a teacher from the table to assign to Subject ID: {url_subjid}
+            </p>""")
             print("</div>")
-    
     else:
         print("""<div style="text-align: center; padding: 20px;">
-                    <p style="color: #666;">
-                        To assign subjects to teachers, go to Subjects page and select a subject first
-                    </p>
-                </div>""")
-
+            <p style="color: #666;">
+                To assign teachers to subjects, go to Subjects page and select a subject first
+            </p>
+        </div>""")
     print("""
-                    </div>
-                </div>
-                
-                <div>
-                    <div class="form-container">
-                        <h2>Teachers Table for: enrollmentsystem</h2>
-                        <table border="1" id="teachersTable">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Name</th>
-                                    <th>Department</th>
-                                    <th>Contact</th>
-                                    <th>Status</th>
-                                    <th>#Subj</th>
-                                    <th>TotUnits</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+            </div>
+        </div>
+        
+        <div>
+            <div class="form-container">
+                <h2>Teachers Table for: """ + database_name + """</h2>
+                <table border="1" id="teachersTable">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Department</th>
+                            <th>Address</th>
+                            <th>Contact</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
     """)
-
     for teacher in teachers:
-        print("<tr onclick='selectTeacher(" + str(teacher[0]) + ", \"" + 
-               html.escape(str(teacher[1])) + "\", \"" + 
-               html.escape(str(teacher[2])) + "\", \"" + 
-               "\", \"" +  # tadd (not in query)
-               html.escape(str(teacher[3])) + "\", \"" + 
-               html.escape(str(teacher[4])) + "\")'>")
+        print("<tr onclick='selectTeacher(" + str(teacher[0]) + ", \"" + html.escape(str(teacher[1])) + "\", \"" + html.escape(str(teacher[2])) + "\", \"" + html.escape(str(teacher[3])) + "\", \"" + html.escape(str(teacher[4])) + "\", \"" + html.escape(str(teacher[5])) + "\")'>")
         print("<td>" + str(teacher[0]) + "</td>")
         print("<td>" + html.escape(str(teacher[1])) + "</td>")
         print("<td>" + html.escape(str(teacher[2])) + "</td>")
         print("<td>" + html.escape(str(teacher[3])) + "</td>")
         print("<td>" + html.escape(str(teacher[4])) + "</td>")
-        print("<td>" + str(teacher[5]) + "</td>")
-        print("<td>" + str(teacher[6]) + "</td>")
+        print("<td>" + html.escape(str(teacher[5])) + "</td>")
         print("</tr>")
-
     print("""
-                            </tbody>
-                        </table>
-                    </div>
-                    
-                    <div class="form-container" style="margin-top: 30px;">
-                        <h2>Assigned Subjects</h2>
-                        <table border="1" id="assignedSubjectsTable">
-                            <thead>
-                                <tr>
-                                    <th>Subject ID</th>
-                                    <th>Code</th>
-                                    <th>Description</th>
-                                    <th>Units</th>
-                                    <th>Schedule</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="form-container" style="margin-top: 30px;">
+                <h2>Assigned Subjects for Teacher ID: """ + (url_tid if url_tid else "None") + """</h2>
+                <table border="1" id="assignedSubjectsTable">
+                    <thead>
+                        <tr>
+                            <th>Subject ID</th>
+                            <th>Code</th>
+                            <th>Description</th>
+                            <th>Units</th>
+                            <th>Schedule</th>
+                        </tr>
+                    </thead>
+                    <tbody>
     """)
-
     if assigned_subjects:
         for subject in assigned_subjects:
             print("<tr onclick='selectAssignedSubject(" + str(subject[0]) + ", \"" + html.escape(str(subject[1])) + "\")'>")
@@ -1052,25 +1299,24 @@ try:
             print("</tr>")
     else:
         print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No assigned subjects</td></tr>")
-
-    print("""
-                            </tbody>
-                        </table>
-                        <div style="margin-top: 20px; text-align: center;">
-                            <button id="unassignButton" type="button" onclick="unassignSubject()" class="drop-button" style="width: 100%; padding: 12px; display: none;" disabled>
-                                Unassign Subject
-                            </button>
-                        </div>
-                    </div>
+    
+    unassign_button_disabled = "" if is_admin else "disabled"
+    print(f"""
+                    </tbody>
+                </table>
+                <div style="margin-top: 20px; text-align: center;">
+                    <button id="unassignButton" type="button" onclick="unassignSubject()" class="unassign-button" style="width: 100%; padding: 12px; display: none;" {unassign_button_disabled}>
+                        Unassign Subject
+                    </button>
                 </div>
             </div>
         </div>
+    </div>
+    </div>
     </body>
     </html>
     """)
-
     cursor.close()
     conn.close()
-
 except Exception as e:
     print(f"<html><body><h1>Error</h1><p>{html.escape(str(e))}</p></body></html>")
