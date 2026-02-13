@@ -58,6 +58,10 @@ if not is_logged_in:
 if not database_name:
     print("<script>alert('Please select a database first');window.location.href = 'index.py';</script>")
     sys.exit()
+    
+    # SECURITY: Teachers cannot access students.py interface
+# They can only use enrollment functions called from subjects.py
+
 
 # SECURITY FUNCTION: Auto-logout unauthorized students
 def check_student_security_action(action_type, subject_action, is_student):
@@ -198,6 +202,14 @@ selected_studid = form.getvalue("selected_studid", "")
 selected_subjid = form.getvalue("selected_subjid", "")
 subject_action = form.getvalue("subject_action", "")
 
+# URL parameters - PRESERVE THEM ALL
+url_studid = form.getvalue("studid", "")
+url_subjid = form.getvalue("subjid", "")
+url_tid = form.getvalue("tid", "")  # Also preserve teacher ID if coming from teachers.py
+error_msg = form.getvalue("error", "")
+success_msg = form.getvalue("success", "")
+created_msg = form.getvalue("created", "")
+
 # SECURITY CHECK: Auto-logout students attempting unauthorized actions
 if check_student_security_action(action_type, subject_action, is_student):
     print("Set-Cookie: session_id=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; HttpOnly")
@@ -209,21 +221,35 @@ if check_student_security_action(action_type, subject_action, is_student):
     sys.exit()
 
 # RBAC Check for student CRUD operations - ADMIN ONLY
-if action_type in ["insert", "update", "delete"] and not is_admin:
-    print("<script>alert('Access Denied: Only administrators can modify student records');window.location.href = 'students.py';</script>")
-    sys.exit()
-
-# RBAC Check for enrollment operations - ADMIN ONLY
-if subject_action in ["enroll", "drop"] and not is_admin:
-    print("<script>alert('Access Denied: Only administrators can enroll/drop students');window.location.href = 'students.py';</script>")
-    sys.exit()
-
-# URL parameters
-url_studid = form.getvalue("studid", "")
-url_subjid = form.getvalue("subjid", "")
-error_msg = form.getvalue("error", "")
-success_msg = form.getvalue("success", "")
-created_msg = form.getvalue("created", "")
+if action_type in ["insert", "update", "delete"]:
+    if is_student:
+        # SECURITY: Logout students attempting CRUD
+        print("Set-Cookie: session_id=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; HttpOnly")
+        print("Set-Cookie: username=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: user_role=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print()
+        print("<script>alert('SECURITY ALERT: Unauthorized action detected. You have been logged out.');window.location.href='index.py';</script>")
+        sys.exit()
+    elif not is_admin:
+        # Teachers cannot modify students in students.py
+        print("<script>alert('Access Denied: Only administrators can modify student records');window.location.href = 'students.py';</script>")
+        sys.exit()
+        
+# RBAC Check for enrollment operations - ADMIN OR TEACHER (students logout)
+if subject_action in ["enroll", "drop"]:
+    if is_student:
+        # SECURITY: Logout students attempting enrollment
+        print("Set-Cookie: session_id=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; HttpOnly")
+        print("Set-Cookie: username=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: user_role=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print()
+        print("<script>alert('SECURITY ALERT: Unauthorized enrollment action. You have been logged out.');window.location.href='index.py';</script>")
+        sys.exit()
+    elif not (is_admin or is_teacher):
+        print("<script>alert('Access Denied');window.location.href = 'students.py';</script>")
+        sys.exit()
 
 def parse_time(time_str):
     """Parse time string (HHMM or HH:MM) to minutes"""
@@ -393,6 +419,69 @@ def delete_mysql_user_for_student(studid, studname):
         return True
     except Exception as e:
         return False
+    
+def delete_all_database_users(database_name):
+    """Delete all MySQL users associated with a specific database"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Get all users that have grants on this database
+        cursor.execute("SELECT User FROM mysql.user")
+        all_users = cursor.fetchall()
+        
+        deleted_count = 0
+        for user_tuple in all_users:
+            username = user_tuple[0]
+            
+            # Skip system users (root, mysql.sys, etc.)
+            if username in ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema']:
+                continue
+            
+            # Skip users that don't look like students or teachers
+            # Students: 4-digit ID starting with 1-2
+            # Teachers: 4-digit ID starting with 3
+            if len(username) < 4:
+                continue
+                
+            try:
+                # Check if user has grants on this database
+                cursor.execute(f"SHOW GRANTS FOR '{username}'@'localhost'")
+                grants = cursor.fetchall()
+                
+                # Check if any grant is for our database
+                has_grant_on_db = False
+                for grant_tuple in grants:
+                    grant_str = grant_tuple[0]
+                    if f"`{database_name}`" in grant_str or database_name in grant_str:
+                        has_grant_on_db = True
+                        break
+                
+                # If user has grant on this database, drop them
+                if has_grant_on_db:
+                    cursor.execute(f"DROP USER '{username}'@'localhost'")
+                    deleted_count += 1
+                    print(f"<!-- Deleted user: {username} -->", file=sys.stderr)
+                    
+            except mysql.connector.Error as e:
+                # User might not exist or other error, continue
+                print(f"<!-- Error checking user {username}: {str(e)} -->", file=sys.stderr)
+                continue
+        
+        cursor.execute("FLUSH PRIVILEGES")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, deleted_count
+        
+    except Exception as e:
+        print(f"<!-- Error deleting database users: {str(e)} -->", file=sys.stderr)
+        return False, 0
 
 try:
     conn = mysql.connector.connect(
@@ -420,18 +509,45 @@ try:
             success, mysql_username, mysql_password = create_mysql_user_for_student(next_studid, studname, database_name)
             
             if success:
-                print(f"<script>alert('Student added successfully!\\nMySQL User Created:\\nUsername: {mysql_username}\\nPassword: {mysql_password}');window.location.href='students.py?studid={next_studid}';</script>")
+                # Preserve URL parameters in redirect
+                redirect_url = f'students.py?studid={next_studid}'
+                if url_subjid:
+                    redirect_url += f'&subjid={url_subjid}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
+                
+                print(f"<script>alert('Student added successfully!\\nMySQL User Created:\\nUsername: {mysql_username}\\nPassword: {mysql_password}');window.location.href='{redirect_url}';</script>")
             else:
-                print(f"<script>alert('Student added but MySQL user creation failed');window.location.href='students.py?studid={next_studid}';</script>")
+                redirect_url = f'students.py?studid={next_studid}'
+                if url_subjid:
+                    redirect_url += f'&subjid={url_subjid}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
+                print(f"<script>alert('Student added but MySQL user creation failed');window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            print(f"<script>window.location.href='students.py';</script>")
+            redirect_url = 'students.py'
+            if url_subjid:
+                redirect_url += f'?subjid={url_subjid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}' if '?' in redirect_url else f'?tid={url_tid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
     elif action_type == "update" and studid and studname:
         try:
             cursor.execute("UPDATE students SET studname=%s, studadd=%s, studcrs=%s, studgender=%s, yrlvl=%s WHERE studid=%s", (studname, studadd, studcrs, studgender, yrlvl, studid))
             conn.commit()
-            print(f"<script>window.location.href='students.py?studid={studid}';</script>")
+            redirect_url = f'students.py?studid={studid}'
+            if url_subjid:
+                redirect_url += f'&subjid={url_subjid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            print(f"<script>window.location.href='students.py?studid={studid}';</script>")
+            redirect_url = f'students.py?studid={studid}'
+            if url_subjid:
+                redirect_url += f'&subjid={url_subjid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
     elif action_type == "delete" and studid:
         try:
             # Get student name before deletion
@@ -452,11 +568,21 @@ try:
             if studname_for_deletion:
                 delete_mysql_user_for_student(studid, studname_for_deletion)
             
-            print(f"<script>window.location.href='students.py';</script>")
+            redirect_url = 'students.py'
+            if url_subjid:
+                redirect_url += f'?subjid={url_subjid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}' if '?' in redirect_url else f'?tid={url_tid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            print(f"<script>window.location.href='students.py';</script>")
+            redirect_url = 'students.py'
+            if url_subjid:
+                redirect_url += f'?subjid={url_subjid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}' if '?' in redirect_url else f'?tid={url_tid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
 
-    # Handle subject enrollment (ADMIN ONLY - already checked above)
+    # Handle subject enrollment (ADMIN OR TEACHER - already checked above)
     if subject_action == "enroll" and selected_studid and selected_subjid:
         try:
             cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (selected_studid,))
@@ -466,6 +592,8 @@ try:
             if student_count == 0 or subject_count == 0:
                 error_msg = "Student or Subject not found"
                 redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
                 sys.exit()
@@ -474,6 +602,8 @@ try:
             if count > 0:
                 error_msg = "Student is already enrolled in this subject"
                 redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
                 sys.exit()
@@ -482,6 +612,8 @@ try:
             conflict_msg = check_schedule_conflict(cursor, selected_studid, selected_subjid)
             if conflict_msg:
                 redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(conflict_msg)}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
                 sys.exit()
@@ -494,14 +626,20 @@ try:
                 eid = result[0]
                 cursor.execute("INSERT INTO grades (enroll_eid) VALUES (%s)", (eid,))
                 conn.commit()
-            url_subjid = form.getvalue("subjid", "")
+            
             redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&success=Student enrolled successfully'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}'
             if url_subjid and url_subjid != selected_subjid:
                 redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&success=Student enrolled successfully'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
             error_msg = f"Enrollment failed: {str(e)}"
             redirect_url = f'students.py?studid={selected_studid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
     elif subject_action == "drop" and selected_studid and selected_subjid:
         try:
@@ -512,22 +650,31 @@ try:
                 cursor.execute("DELETE FROM grades WHERE enroll_eid = %s", (eid,))
                 cursor.execute("DELETE FROM enroll WHERE eid = %s", (eid,))
                 conn.commit()
-                url_subjid = form.getvalue("subjid", "")
                 redirect_url = f'students.py?studid={selected_studid}&success=Subject dropped successfully'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
                 if url_subjid:
                     redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&success=Subject dropped successfully'
+                    if url_tid:
+                        redirect_url += f'&tid={url_tid}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
             else:
-                url_subjid = form.getvalue("subjid", "")
                 redirect_url = f'students.py?studid={selected_studid}&error=Student is not enrolled in this subject'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
                 if url_subjid:
                     redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}&error=Student is not enrolled in this subject'
+                    if url_tid:
+                        redirect_url += f'&tid={url_tid}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
         except Exception as e:
-            url_subjid = form.getvalue("subjid", "")
             redirect_url = f'students.py?studid={selected_studid}'
+            if url_tid:
+                redirect_url += f'&tid={url_tid}'
             if url_subjid:
                 redirect_url = f'students.py?studid={selected_studid}&subjid={url_subjid}'
+                if url_tid:
+                    redirect_url += f'&tid={url_tid}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
 
     # Get all students
@@ -593,6 +740,7 @@ try:
     <head>
     <title>Sumeru Akademiya - Student Enrollment System</title>
     <style>
+    @import url('https://fonts.cdnfonts.com/css/hywenhei');
     * {{ font-family: HYWenHei, sans-serif !important; }}
     body {{ font-family: HYWenHei, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
     .header {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 15px 30px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: space-between; }}
@@ -636,8 +784,77 @@ try:
     .enroll-section h3 {{ color: #1e3c72; margin-top: 0; }}
     .two-column-layout {{ display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; }}
     .enroll-buttons-container {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 15px; }}
-    .create-db-section {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); margin-bottom: 30px; text-align: center; }}
-    .create-db-section h3 {{ color: #1e3c72; margin-top: 0; }}
+     .create-db-section {{ 
+        background: white; 
+        padding: 25px; 
+        border-radius: 10px; 
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); 
+        margin-bottom: 30px; 
+        text-align: center;
+        border: 2px dashed #1e3c72;
+    }}
+    .create-db-section h3 {{ 
+        color: #1e3c72; 
+        margin-top: 0; 
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+    }}
+    .create-db-section h3::before {{
+        content: "folder";
+        font-size: 24px;
+    }}
+                .db-create-select {{ 
+                padding: 12px 20px;
+                border: 2px solid #1e3c72;
+                border-radius: 8px;
+                font-size: 16px;
+                background: white;
+                color: #1e3c72;
+                cursor: pointer;
+                min-width: 200px;
+                font-family: HYWenHei;
+                margin: 0 10px;
+                display: inline-block;
+                appearance: none;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                background-image: url('data:image/svg+xml;utf8,<svg fill="%231e3c72" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/><path d="M0 0h24v24H0z" fill="none"/></svg>');
+                background-repeat: no-repeat;
+                background-position: right 10px center;
+                padding-right: 40px;
+            }}
+            .db-create-select:focus {{
+                outline: none;
+                box-shadow: 0 0 0 3px rgba(30, 60, 114, 0.2);
+            }}
+            .db-create-action {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 12px 24px;
+                background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                font-family: HYWenHei;
+                font-size: 16px;
+                font-weight: bold;
+                text-decoration: none;
+                margin-left: 15px;
+            }}
+            .db-create-action:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 6px 12px rgba(30, 60, 114, 0.3);
+            }}
+            .db-create-action::before {{
+                content: "+";
+                font-size: 18px;
+            }}
     
     /* Status Indicator Styles */
     .status-indicator {{
@@ -673,6 +890,13 @@ try:
         color: #004085;
         border: 1px solid #b8daff;
     }}
+    
+    .semester-selection {{
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+    justify-content: center;
+            }}
     
     /* Role Badge Styles */
     .role-badge {{
@@ -809,9 +1033,13 @@ try:
         
         const urlParams = new URLSearchParams(window.location.search);
         const currentSubjid = urlParams.get('subjid');
+        const currentTid = urlParams.get('tid');
         let newUrl = 'students.py?studid=' + studid;
         if (currentSubjid) {{
             newUrl += '&subjid=' + currentSubjid;
+        }}
+        if (currentTid) {{
+            newUrl += '&tid=' + currentTid;
         }}
         window.location.href = newUrl;
     }}
@@ -833,13 +1061,13 @@ try:
         if (dropButton && selectedStudentId && selectedEnrolledSubjectId) {{
             dropButton.style.display = 'block';
             dropButton.innerHTML = 'Drop Student ID: ' + selectedStudentId + ' from Subject ID: ' + selectedEnrolledSubjectId;
-            dropButton.disabled = !isAdmin;
+            dropButton.disabled = !(isAdmin || isTeacher);
         }}
     }}
     
     function submitForm(action) {{
-        if (!isAdmin) {{
-            alert('Access Denied: Only administrators can modify student records');
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can modify student records');
             return false;
         }}
         let form = document.getElementById('studentForm');
@@ -849,12 +1077,33 @@ try:
         actionInput.value = action;
         form.appendChild(actionInput);
         
+        // Preserve URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentSubjid = urlParams.get('subjid');
+        const currentTid = urlParams.get('tid');
+        
+        if (currentSubjid) {{
+            let subjidInput = document.createElement('input');
+            subjidInput.type = 'hidden';
+            subjidInput.name = 'subjid';
+            subjidInput.value = currentSubjid;
+            form.appendChild(subjidInput);
+        }}
+        
+        if (currentTid) {{
+            let tidInput = document.createElement('input');
+            tidInput.type = 'hidden';
+            tidInput.name = 'tid';
+            tidInput.value = currentTid;
+            form.appendChild(tidInput);
+        }}
+        
         form.submit();
     }}
     
     function enrollStudent(subjid) {{
-        if (!isAdmin) {{
-            alert('Access Denied: Only administrators can enroll students');
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can enroll students');
             return false;
         }}
         let studid = document.getElementById('studid').value;
@@ -889,6 +1138,8 @@ try:
             
             const urlParams = new URLSearchParams(window.location.search);
             const currentSubjid = urlParams.get('subjid');
+            const currentTid = urlParams.get('tid');
+            
             if (currentSubjid) {{
                 let urlSubjId = document.createElement('input');
                 urlSubjId.type = 'hidden';
@@ -897,14 +1148,22 @@ try:
                 form.appendChild(urlSubjId);
             }}
             
+            if (currentTid) {{
+                let urlTid = document.createElement('input');
+                urlTid.type = 'hidden';
+                urlTid.name = 'tid';
+                urlTid.value = currentTid;
+                form.appendChild(urlTid);
+            }}
+            
             document.body.appendChild(form);
             form.submit();
         }}
     }}
     
     function dropSubject() {{
-        if (!isAdmin) {{
-            alert('Access Denied: Only administrators can drop students from subjects');
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can drop students from subjects');
             return false;
         }}
         if (selectedStudentId && selectedEnrolledSubjectId) {{
@@ -938,12 +1197,22 @@ try:
             
             const urlParams = new URLSearchParams(window.location.search);
             const currentSubjid = urlParams.get('subjid');
+            const currentTid = urlParams.get('tid');
+            
             if (currentSubjid) {{
                 let urlSubjId = document.createElement('input');
                 urlSubjId.type = 'hidden';
                 urlSubjId.name = 'subjid';
                 urlSubjId.value = currentSubjid;
                 form.appendChild(urlSubjId);
+            }}
+            
+            if (currentTid) {{
+                let urlTid = document.createElement('input');
+                urlTid.type = 'hidden';
+                urlTid.name = 'tid';
+                urlTid.value = currentTid;
+                form.appendChild(urlTid);
             }}
             
             document.body.appendChild(form);
@@ -995,6 +1264,38 @@ try:
         }}
     }}
     
+            function createDatabase() {{
+                if (!isAdmin) {{
+                    alert('Access Denied: Only administrators can create databases');
+                    return false;
+                }}
+                let semester = document.getElementById('semesterSelect').value;
+                if (!semester) {{
+                    alert('Please select a semester first');
+                    return;
+                }}
+                if (confirm('Are you sure you want to create a new ' + semester + ' semester database? This will create a fresh database with all necessary tables.')) {{
+                    let form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = 'subjects.py';
+                    
+                    let createDbInput = document.createElement('input');
+                    createDbInput.type = 'hidden';
+                    createDbInput.name = 'create_db_action';
+                    createDbInput.value = '1';
+                    form.appendChild(createDbInput);
+                    
+                    let semesterInput = document.createElement('input');
+                    semesterInput.type = 'hidden';
+                    semesterInput.name = 'semester_selection';
+                    semesterInput.value = semester;
+                    form.appendChild(semesterInput);
+                    
+                    document.body.appendChild(form);
+                    form.submit();
+                }}
+            }}
+    
     window.onload = function() {{
         const urlParams = new URLSearchParams(window.location.search);
         const studid = urlParams.get('studid');
@@ -1023,13 +1324,15 @@ try:
                     if (dropButton) {{
                         dropButton.style.display = 'block';
                         dropButton.innerHTML = 'Drop Student ID: ' + selectedStudentId + ' from Subject ID: ' + selectedEnrolledSubjectId;
-                        dropButton.disabled = !isAdmin;
+                        dropButton.disabled = !(isAdmin || isTeacher);
                     }}
                     break;
                 }}
             }}
         }}
     }};
+    
+    
     </script>
     </head>
     <body>
@@ -1043,8 +1346,9 @@ try:
             </div>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
-            <a href="subjects.py{f"?subjid={url_subjid}" if url_subjid else ""}" class="nav-link">Go to Subjects</a>
-            <a href="teachers.py" class="nav-link">Go to Teachers</a>
+            <a href="students.py{f"?subjid={url_subjid}" if url_subjid else ""}{f"&tid={url_tid}" if url_tid and url_subjid else f"?tid={url_tid}" if url_tid else ""}" class="nav-link">Students</a>
+            <a href="subjects.py{f"?subjid={url_subjid}" if url_subjid else ""}{f"&tid={url_tid}" if url_tid and url_subjid else f"?tid={url_tid}" if url_tid else ""}" class="nav-link">Subjects</a>
+            <a href="teachers.py{f"?subjid={url_subjid}" if url_subjid else ""}{f"&tid={url_tid}" if url_tid and url_subjid else f"?tid={url_tid}" if url_tid else ""}" class="nav-link">Teachers</a>
             <button onclick="logout()" class="logout-button">Logout</button>
         </div>
     </div>
@@ -1082,15 +1386,22 @@ try:
 
     # Create Database Section - Show only for admins
     if is_admin:
-        print("""
+        print(f"""
         <div class="create-db-section">
             <h3>Create New Semester Database</h3>
             <p>Create a fresh database for a new semester. This will create all necessary tables.</p>
             <div class="semester-selection">
-                <button class="semester-btn" onclick="createDatabase('1st')">Create 1st Semester Database</button>
-                <button class="semester-btn" onclick="createDatabase('2nd')">Create 2nd Semester Database</button>
-                <button class="semester-btn" onclick="createDatabase('summer')">Create Summer Database</button>
+                <select id="semesterSelect" class="db-create-select">
+                    <option value="">-- Select Semester --</option>
+                    <option value="1st">1st Semester</option>
+                    <option value="2nd">2nd Semester</option>
+                    <option value="summer">Summer</option>
+                </select>
+                <a href="#" onclick="createDatabase()" class="db-create-action">Create Database</a>
             </div>
+            <p style="margin-top: 15px; color: #666; font-size: 14px;">
+                Current Database: <strong>{database_name}</strong>
+            </p>
         </div>
         """)
 
@@ -1101,11 +1412,15 @@ try:
                 <h2>Student Form</h2>
                 <form method="POST" action="students.py" id="studentForm">
     """)
+    
+    # Preserve URL parameters in the form
     if url_subjid:
         print(f"<input type='hidden' name='subjid' value='{url_subjid}'>")
+    if url_tid:
+        print(f"<input type='hidden' name='tid' value='{url_tid}'>")
     
-    # Disable form inputs for non-admins
-    disabled_attr = "" if is_admin else "disabled"
+    # Disable form inputs for non-admins/non-teachers
+    disabled_attr = "" if (is_admin or is_teacher) else "disabled"
     
     print(f"""
                     <table style="width: 100%;">
@@ -1182,7 +1497,7 @@ try:
                 </div>
                 """)
             else:
-                button_disabled = "" if is_admin else "disabled"
+                button_disabled = "" if (is_admin or is_teacher) else "disabled"
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center;">
                     <button type="button" onclick="enrollStudent('{url_subjid}')" class="enroll-green-button" {button_disabled}>
@@ -1267,7 +1582,7 @@ try:
     else:
         print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No enrolled subjects</td></tr>")
     
-    drop_button_disabled = "" if is_admin else "disabled"
+    drop_button_disabled = "" if (is_admin or is_teacher) else "disabled"
     print(f"""
                     </tbody>
                 </table>

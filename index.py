@@ -98,7 +98,7 @@ if not is_logged_in and login_attempt == "1" and username and password:
     
     else:
         # SECOND CHECK: Try student/teacher MySQL user authentication
-        # First, connect as root to get the student/teacher name
+        # First, connect as root to check the database
         try:
             # Connect as root to check the database
             root_conn = mysql.connector.connect(
@@ -119,13 +119,16 @@ if not is_logged_in and login_attempt == "1" and username and password:
             user_found = False
             user_name_from_db = ""
             user_role_from_db = ""
+            user_db_found = ""  # Track which database the user was found in
             
             for db_row in all_databases:
                 db_name = db_row[0]
                 if year_pattern in db_name:
                     try:
-                        # Check students table
+                        # Check students table in this database
                         root_cursor.execute(f"USE `{db_name}`")
+                        
+                        # Check students table
                         root_cursor.execute("SELECT studid, studname FROM students")
                         students = root_cursor.fetchall()
                         
@@ -141,9 +144,10 @@ if not is_logged_in and login_attempt == "1" and username and password:
                                     user_found = True
                                     user_name_from_db = safe_name
                                     user_role_from_db = "student"
+                                    user_db_found = db_name
                                     break
                         
-                        # Check teachers table
+                        # Check teachers table if student not found
                         if not user_found:
                             root_cursor.execute("SELECT tid, tname FROM teachers")
                             teachers = root_cursor.fetchall()
@@ -160,6 +164,7 @@ if not is_logged_in and login_attempt == "1" and username and password:
                                         user_found = True
                                         user_name_from_db = safe_name
                                         user_role_from_db = "teacher"
+                                        user_db_found = db_name
                                         break
                         
                         if user_found:
@@ -217,7 +222,7 @@ if is_logged_in and form.getvalue("database"):
     # Get existing session_id
     session_id = cookies['session_id'].value if 'session_id' in cookies else secrets.token_hex(32)
     
-    # Check if user has access to the selected database
+    # Check if user has access to the selected database AND still exists in that database
     try:
         # For root admin, use root credentials
         if is_admin:
@@ -229,8 +234,59 @@ if is_logged_in and form.getvalue("database"):
                 database=selected_db
             )
         else:
-            # For student/teacher users, we need to get the name to construct password
-            # Extract name from username (remove digits)
+            # For student/teacher users, verify they still exist in this specific database
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="root",
+                database=selected_db
+            )
+            root_cursor = conn.cursor()
+            
+            # Extract ID from username
+            import re
+            numbers = re.findall(r'\d+', username)
+            user_id = int(numbers[0]) if numbers else 0
+            
+            # Check if user exists in this specific database
+            user_exists_in_db = False
+            
+            if is_student:
+                root_cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (user_id,))
+                count = root_cursor.fetchone()[0]
+                user_exists_in_db = (count > 0)
+            elif is_teacher:
+                root_cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (user_id,))
+                count = root_cursor.fetchone()[0]
+                user_exists_in_db = (count > 0)
+            
+            conn.close()
+            
+            if not user_exists_in_db:
+                login_error = f"Your account does not exist in database: {selected_db}. You may have been dropped from this database."
+                # Clear database cookie
+                print(f"Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+                print()
+                # Show error message and redirect back to database selection
+                print(f"""
+                <html>
+                <head>
+                    <meta http-equiv="refresh" content="3;url=index.py">
+                </head>
+                <body>
+                    <div style="font-family: HYWenHei, sans-serif; margin: 50px auto; width: 500px; padding: 30px; background: white; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center;">
+                        <h2 style="color: #dc3545;">Access Denied</h2>
+                        <p style="color: #721c24; background: #f8d7da; padding: 15px; border-radius: 5px; border: 1px solid #f5c6cb;">
+                            {html.escape(login_error)}
+                        </p>
+                        <p>Redirecting to database selection page...</p>
+                    </div>
+                </body>
+                </html>
+                """)
+                sys.exit()
+            
+            # Now connect with actual user credentials
             name_only = ''.join([c for c in username if not c.isdigit()])
             mysql_password = f"AdDU{name_only}"
             
@@ -240,6 +296,7 @@ if is_logged_in and form.getvalue("database"):
                 password=mysql_password,
                 database=selected_db
             )
+        
         conn.close()
         
         # Set cookies with the selected database
@@ -278,8 +335,72 @@ if is_logged_in and form.getvalue("database"):
         # User doesn't have access to this database
         login_error = f"Access denied to database: {selected_db}"
 
-# If already logged in with database selected via cookies, redirect directly
+# If already logged in with database selected via cookies, verify user still exists in that database
 if is_logged_in and database_name:
+    # For non-admin users, verify they still exist in the database
+    if not is_admin:
+        try:
+            # Connect as root to check
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="root",
+                database=database_name
+            )
+            cursor = conn.cursor()
+            
+            # Extract ID from username
+            import re
+            numbers = re.findall(r'\d+', username)
+            user_id = int(numbers[0]) if numbers else 0
+            
+            # Check if user exists in this database
+            user_exists = False
+            
+            if is_student:
+                cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (user_id,))
+                count = cursor.fetchone()[0]
+                user_exists = (count > 0)
+            elif is_teacher:
+                cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (user_id,))
+                count = cursor.fetchone()[0]
+                user_exists = (count > 0)
+            
+            conn.close()
+            
+            if not user_exists:
+                # Clear database cookie since user no longer exists in this database
+                print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+                print()
+                # Redirect back to database selection
+                print(f"""
+                <html>
+                <head>
+                    <meta http-equiv="refresh" content="0;url=index.py">
+                </head>
+                <body>
+                    <p>Your account no longer exists in this database. Redirecting...</p>
+                </body>
+                </html>
+                """)
+                sys.exit()
+                
+        except mysql.connector.Error:
+            # Database might not exist anymore, clear cookie
+            print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+            print()
+            print(f"""
+            <html>
+            <head>
+                <meta http-equiv="refresh" content="0;url=index.py">
+            </head>
+            <body>
+                <p>Database no longer available. Redirecting...</p>
+            </body>
+            </html>
+            """)
+            sys.exit()
+    
     print()
     if is_admin or is_teacher:
         print(f"""
@@ -310,7 +431,7 @@ print()
 
 # If logged in but hasn't selected a database yet, show database selection
 if is_logged_in:
-    # Get databases that the user has access to
+    # Get databases that the user has access to AND still exists in
     formatted_databases = []
     database_error = ""
     
@@ -344,23 +465,27 @@ if is_logged_in:
             conn.close()
             
         elif is_teacher or is_student:
-            # For student/teacher users, get databases they have privileges for
+            # For student/teacher users, get databases they have privileges for AND still exist in
+            # Extract ID from username
+            import re
+            numbers = re.findall(r'\d+', username)
+            user_id = int(numbers[0]) if numbers else 0
+            
             # Extract name from username (remove digits)
             name_only = ''.join([c for c in username if not c.isdigit()])
             mysql_password = f"AdDU{name_only}"
             
             try:
-                conn = mysql.connector.connect(
+                # First connect as root to check which databases the user exists in
+                root_conn = mysql.connector.connect(
                     host="localhost",
-                    user=username,
-                    password=mysql_password
+                    user="root",
+                    password="root"
                 )
+                root_cursor = root_conn.cursor()
                 
-                cursor = conn.cursor()
-                
-                # METHOD 3: Try to USE each database that matches pattern
-                cursor.execute("SHOW DATABASES")
-                all_databases = cursor.fetchall()
+                root_cursor.execute("SHOW DATABASES")
+                all_databases = root_cursor.fetchall()
                 
                 current_year = datetime.datetime.now().year
                 next_year = current_year + 1
@@ -371,23 +496,44 @@ if is_logged_in:
                     
                     if year_pattern in db_name:
                         try:
-                            # Try to USE the database
-                            cursor.execute(f"USE `{db_name}`")
-                            # If successful, add to list
-                            formatted_databases.append(db_name)
-                            # Switch back to no database
-                            cursor.execute("USE NULL")
+                            # Check if user exists in this database
+                            root_cursor.execute(f"USE `{db_name}`")
+                            
+                            if is_student:
+                                root_cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (user_id,))
+                            elif is_teacher:
+                                root_cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (user_id,))
+                            
+                            count = root_cursor.fetchone()[0]
+                            
+                            # Only add database if user exists in it
+                            if count > 0:
+                                # Also verify MySQL user has access
+                                try:
+                                    user_conn = mysql.connector.connect(
+                                        host="localhost",
+                                        user=username,
+                                        password=mysql_password,
+                                        database=db_name
+                                    )
+                                    user_conn.close()
+                                    formatted_databases.append(db_name)
+                                except mysql.connector.Error:
+                                    # User doesn't have MySQL privileges
+                                    pass
+                                    
                         except mysql.connector.Error:
-                            # User cannot access this database
+                            # Cannot access this database
                             pass
+                
+                root_cursor.close()
+                root_conn.close()
                 
                 formatted_databases = list(set(formatted_databases))  # Remove duplicates
                 formatted_databases.sort()
-                cursor.close()
-                conn.close()
                 
                 if not formatted_databases:
-                    database_error = "No databases available for your account. Please contact administrator."
+                    database_error = "No databases available for your account. You may have been dropped from all databases. Please contact administrator."
                 
             except mysql.connector.Error as e:
                 database_error = "Cannot retrieve database list. Please login again."
@@ -412,6 +558,7 @@ if is_logged_in:
     <head>
         <title>STUDENT INFORMATION SYSTEM</title>
         <style>
+        @import url('https://fonts.cdnfonts.com/css/hywenhei');
             * {
                 font-family: HYWenHei, sans-serif !important;
             }
@@ -632,7 +779,7 @@ if is_logged_in:
                 You are logged in as <strong>Teacher</strong>. You can:
                 <ul style="margin: 10px 0; padding-left: 20px;">
                     <li>Modify subjects (insert, update, delete)</li>
-                    <li>Enroll/drop students from subjects</li>
+                    <li>Enroll/drop students from subjects you teach</li>
                     <li>View all students and subjects</li>
                 </ul>
             </div>
@@ -864,7 +1011,7 @@ elif login_error:
                         • Password = <code>AdDU</code> + Name only (e.g., AdDUjohndoe)<br>
                         <strong>Role Permissions:</strong><br>
                         • Admin: Full access to all functions<br>
-                        • Teachers: Can modify subjects and enroll students<br>
+                        • Teachers: Can modify subjects and enroll/drop students in subjects they teach<br>
                         • Students: Read-only access to enrolled subjects
                     </div>
                 </div>
@@ -1044,7 +1191,7 @@ else:
                         • Password = <code>AdDU</code> + Name only (e.g., AdDUjohndoe)<br>
                         <strong>Role Permissions:</strong><br>
                         • Admin: Full access to all functions<br>
-                        • Teachers: Can modify subjects and enroll students<br>
+                        • Teachers: Can modify subjects and enroll/drop students in subjects they teach<br>
                         • Students: Read-only access to enrolled subjects
                     </div>
                 </div>

@@ -203,10 +203,20 @@ if action_type in ["insert", "update", "delete"] and not (is_admin or is_teacher
     print("<script>alert('Access Denied: Only administrators or teachers can modify subject records');window.location.href = 'subjects.py';</script>")
     sys.exit()
 
-# RBAC Check for enrollment operations - ADMIN OR TEACHER
-if subject_action in ["enroll", "drop"] and not (is_admin or is_teacher):
-    print("<script>alert('Access Denied: Only administrators or teachers can enroll/drop students');window.location.href = 'subjects.py';</script>")
-    sys.exit()
+# RBAC Check for enrollment operations - ADMIN OR TEACHER (students logout)
+if subject_action in ["enroll", "drop"]:
+    if is_student:
+        # SECURITY: Logout students attempting enrollment
+        print("Set-Cookie: session_id=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; HttpOnly")
+        print("Set-Cookie: username=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print("Set-Cookie: user_role=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        print()
+        print("<script>alert('SECURITY ALERT: Students cannot enroll/drop students. You have been logged out.');window.location.href='index.py';</script>")
+        sys.exit()
+    elif not (is_admin or is_teacher):
+        print("<script>alert('Access Denied');window.location.href = 'subjects.py';</script>")
+        sys.exit()
 
 def parse_time(time_str):
     """Parse time string (HHMM or HH:MM) to minutes"""
@@ -359,6 +369,69 @@ def get_student_id_from_username(cursor, username):
         return None
     except:
         return None
+    
+def delete_all_database_users(database_name):
+    """Delete all MySQL users associated with a specific database"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Get all users that have grants on this database
+        cursor.execute("SELECT User FROM mysql.user")
+        all_users = cursor.fetchall()
+        
+        deleted_count = 0
+        for user_tuple in all_users:
+            username = user_tuple[0]
+            
+            # Skip system users (root, mysql.sys, etc.)
+            if username in ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema']:
+                continue
+            
+            # Skip users that don't look like students or teachers
+            # Students: 4-digit ID starting with 1-2
+            # Teachers: 4-digit ID starting with 3
+            if len(username) < 4:
+                continue
+                
+            try:
+                # Check if user has grants on this database
+                cursor.execute(f"SHOW GRANTS FOR '{username}'@'localhost'")
+                grants = cursor.fetchall()
+                
+                # Check if any grant is for our database
+                has_grant_on_db = False
+                for grant_tuple in grants:
+                    grant_str = grant_tuple[0]
+                    if f"`{database_name}`" in grant_str or database_name in grant_str:
+                        has_grant_on_db = True
+                        break
+                
+                # If user has grant on this database, drop them
+                if has_grant_on_db:
+                    cursor.execute(f"DROP USER '{username}'@'localhost'")
+                    deleted_count += 1
+                    print(f"<!-- Deleted user: {username} -->", file=sys.stderr)
+                    
+            except mysql.connector.Error as e:
+                # User might not exist or other error, continue
+                print(f"<!-- Error checking user {username}: {str(e)} -->", file=sys.stderr)
+                continue
+        
+        cursor.execute("FLUSH PRIVILEGES")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, deleted_count
+        
+    except Exception as e:
+        print(f"<!-- Error deleting database users: {str(e)} -->", file=sys.stderr)
+        return False, 0
 
 try:
     # Connect to MySQL database
@@ -631,6 +704,7 @@ try:
     <head>
         <title>Sumeru Akademiya - Subject Management System</title>
         <style>
+        @import url('https://fonts.cdnfonts.com/css/hywenhei');
             * {{
                 font-family: HYWenHei, sans-serif !important;
             }}
@@ -1292,6 +1366,7 @@ try:
 
     # Generate navigation links
     students_link = "students.py"
+    subjects_link = "subjects.py"
     teachers_link = "teachers.py"
     
     if url_subjid:
@@ -1300,6 +1375,7 @@ try:
 
     print(f"""
                 <a href="{students_link}" class="nav-link">Students</a>
+                <a href="{subjects_link}" class="nav-link">Subjects</a>
                 <a href="{teachers_link}" class="nav-link">Teachers</a>
                 <button onclick="logout()" class="logout-button">Logout</button>
             </div>
@@ -1378,23 +1454,23 @@ try:
                     <table class="form-table">
                         <tr>
                             <td>Subject ID:</td>
-                            <td><input type="text" name="subjid" id="subjid" style="width: 100px" readonly value=""" + f"'{prefill_data.get('subjid', '')}'" + """></td>
+                            <td><input type="text" name="subjid" id="subjid" style="width: 100px" readonly value="{prefill_data.get('subjid', '')}"></td>
                         </tr>
                         <tr>
                             <td>Code:</td>
-                            <td><input type="text" name="subjcode" id="subjcode" style="width: 150px" value=""" + f"'{html.escape(prefill_data.get('subjcode', ''))}'" + """ {disabled_attr}></td>
+                            <td><input type="text" name="subjcode" id="subjcode" style="width: 150px" value="{html.escape(prefill_data.get('subjcode', ''))}" {disabled_attr}></td>
                         </tr>
                         <tr>
                             <td>Description:</td>
-                            <td><input type="text" name="subjdesc" id="subjdesc" style="width: 200px" value=""" + f"'{html.escape(prefill_data.get('subjdesc', ''))}'" + """ {disabled_attr}></td>
+                            <td><input type="text" name="subjdesc" id="subjdesc" style="width: 200px" value="{html.escape(prefill_data.get('subjdesc', ''))}" {disabled_attr}></td>
                         </tr>
                         <tr>
                             <td>Units:</td>
-                            <td><input type="text" name="subjunits" id="subjunits" style="width: 80px" value=""" + f"'{prefill_data.get('subjunits', '')}'" + """ {disabled_attr}></td>
+                            <td><input type="text" name="subjunits" id="subjunits" style="width: 80px" value="{prefill_data.get('subjunits', '')}" {disabled_attr}></td>
                         </tr>
                         <tr>
                             <td>Schedule:</td>
-                            <td><input type="text" name="subjsched" id="subjsched" style="width: 150px" value=""" + f"'{html.escape(prefill_data.get('subjsched', ''))}'" + """ {disabled_attr}></td>
+                            <td><input type="text" name="subjsched" id="subjsched" style="width: 150px" value="{html.escape(prefill_data.get('subjsched', ''))}" {disabled_attr}></td>
                         </tr>
                     </table>
                     <div class="button-container">
@@ -1404,55 +1480,13 @@ try:
                     </div>
                 </form>
             </div>
-
-            <div class="form-container">
-                <h3>Subject Information</h3>
-    """)
-
-    if url_subjid and prefill_data.get('subjid'):
-        print(f"""<div style="text-align: center; margin-bottom: 15px;">
-            <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Selected Subject: {url_subjid}</p>
-            <p><strong>Code:</strong> {html.escape(prefill_data.get('subjcode', ''))}</p>
-            <p><strong>Description:</strong> {html.escape(prefill_data.get('subjdesc', ''))}</p>
-            <p><strong>Units:</strong> {prefill_data.get('subjunits', '')}</p>
-            <p><strong>Schedule:</strong> {html.escape(prefill_data.get('subjsched', ''))}</p>
-        </div>""")
-        
-        if teacher_of_subject:
-            print(f"""<div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px; border-left: 4px solid #007bff;">
-                <p style="font-weight: bold; color: #007bff; margin-bottom: 5px;">Assigned Teacher:</p>
-                <p><strong>Name:</strong> {html.escape(teacher_of_subject['tname'])}</p>
-                <p><strong>Department:</strong> {html.escape(teacher_of_subject['tdept'])}</p>
-            </div>""")
-        
-        # Enrollment form for teachers
-        if is_teacher or is_admin:
-            print(f"""
-            <div style="margin-top: 20px; padding: 15px; background-color: #f0f8ff; border-radius: 5px; border: 1px solid #d0e7ff;">
-                <p style="font-weight: bold; color: #1e3c72; margin-bottom: 10px;">Enroll Student in This Subject:</p>
-                <form method="POST" action="subjects.py" style="display: flex; gap: 10px; align-items: center;">
-                    <input type="hidden" name="subjid" value="{url_subjid}">
-                    <input type="text" name="selected_studid" placeholder="Student ID" style="flex: 1; padding: 8px;">
-                    <input type="hidden" name="selected_subjid" value="{url_subjid}">
-                    <button type="submit" name="subject_action" value="enroll" class="assign-button" style="padding: 8px 15px;">Enroll Student</button>
-                </form>
-            </div>
-            """)
-    else:
-        print("""<div style="text-align: center; padding: 20px;">
-            <p style="color: #666;">
-                Select a subject from the table to view details
-            </p>
-        </div>""")
-
-    print("""
-            </div>
         </div>
 
         <div>
             <div class="form-container">
-                <h2>Subjects Table for: """ + database_name + """</h2>
+                <h2>Subjects Table for: {database_name}</h2>
     """)
+    
     
     if is_admin:
         print("<p>All subjects in the database (Administrator View)</p>")

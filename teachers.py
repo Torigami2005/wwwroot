@@ -60,14 +60,17 @@ if not database_name:
     sys.exit()
 
 # SECURITY FUNCTION: Redirect students attempting unauthorized actions
-def redirect_student_security_action(action_type, assignment_action, is_student):
+def redirect_student_security_action(action_type, assignment_action, enrollment_action, is_student):
     """Redirect student to index.py if attempting unauthorized actions"""
     if is_student:
-        # Check for CRUD actions in teachers.py
+        # Check for CRUD actions
         if action_type in ["insert", "update", "delete"]:
             return True
         # Check for teacher-subject assignment actions
         if assignment_action in ["assign", "unassign"]:
+            return True
+        # Check for enrollment/drop actions
+        if enrollment_action in ["enroll", "drop"]:
             return True
         # Check for database creation
         if create_db_action == "1":
@@ -198,15 +201,21 @@ selected_tid = form.getvalue("selected_tid", "")
 selected_subjid = form.getvalue("selected_subjid", "")
 assignment_action = form.getvalue("assignment_action", "")
 
+# For enrollment operations (ENROLL/DROP STUDENTS)
+selected_studid = form.getvalue("selected_studid", "")
+selected_subjid_enroll = form.getvalue("selected_subjid_enroll", "")
+enrollment_action = form.getvalue("enrollment_action", "")
+
 # URL parameters
 url_tid = form.getvalue("tid", "")
 url_subjid = form.getvalue("subjid", "")
+url_studid = form.getvalue("studid", "")
 error_msg = form.getvalue("error", "")
 success_msg = form.getvalue("success", "")
 created_msg = form.getvalue("created", "")
 
 # SECURITY CHECK: Redirect students attempting unauthorized actions
-if redirect_student_security_action(action_type, assignment_action, is_student):
+if redirect_student_security_action(action_type, assignment_action, enrollment_action, is_student):
     print()
     print("<script>alert('Security Alert: Unauthorized action attempted. Redirecting to login.');window.location.href = 'index.py';</script>")
     sys.exit()
@@ -219,6 +228,11 @@ if action_type in ["insert", "update", "delete"] and not is_admin:
 # RBAC Check for assignment operations - ADMIN ONLY
 if assignment_action in ["assign", "unassign"] and not is_admin:
     print("<script>alert('Access Denied: Only administrators can assign/unassign subjects to teachers');window.location.href = 'teachers.py';</script>")
+    sys.exit()
+
+# RBAC Check for enrollment operations - ADMIN OR TEACHER
+if enrollment_action in ["enroll", "drop"] and not (is_admin or is_teacher):
+    print("<script>alert('Access Denied: Only administrators or teachers can enroll/drop students');window.location.href = 'teachers.py';</script>")
     sys.exit()
 
 def parse_time(time_str):
@@ -239,6 +253,88 @@ def parse_time(time_str):
         return hours * 60 + minutes
     except:
         return None
+
+def check_schedule_conflict(cursor, student_id, subject_id):
+    """Check if enrolling a student in a subject would create a schedule conflict"""
+    try:
+        # Get the schedule of the new subject
+        cursor.execute("SELECT subjsched FROM subjects WHERE subjid = %s", (subject_id,))
+        new_subject = cursor.fetchone()
+        if not new_subject or not new_subject[0]:
+            return None  # No schedule to check
+            
+        new_sched = new_subject[0].strip()
+        if not new_sched or len(new_sched) < 3:
+            return None
+            
+        # Parse new schedule (format: "MWF 0830-1000" or "MWF 08:30-10:00")
+        new_days = new_sched[:3].upper()
+        
+        # Find time part
+        time_part_start = 3
+        while time_part_start < len(new_sched) and new_sched[time_part_start] == ' ':
+            time_part_start += 1
+            
+        time_part = new_sched[time_part_start:].strip()
+        if '-' not in time_part:
+            return None
+            
+        new_stime_str, new_etime_str = time_part.split('-')
+        new_stime_str = new_stime_str.strip()
+        new_etime_str = new_etime_str.strip()
+        
+        new_start_minutes = parse_time(new_stime_str)
+        new_end_minutes = parse_time(new_etime_str)
+        
+        if new_start_minutes is None or new_end_minutes is None:
+            return None  # Invalid time format
+            
+        # Get other subjects enrolled by this student
+        cursor.execute("""
+            SELECT s.subjcode, s.subjsched 
+            FROM subjects s 
+            INNER JOIN enroll e ON s.subjid = e.subjid 
+            WHERE e.studid = %s 
+            AND s.subjsched IS NOT NULL 
+            AND s.subjsched != ''
+        """, (student_id,))
+        enrolled_subjects = cursor.fetchall()
+        
+        # Check each enrolled subject
+        for enrolled_code, enrolled_sched in enrolled_subjects:
+            if enrolled_sched and len(enrolled_sched.strip()) >= 3:
+                old_sched = enrolled_sched.strip()
+                old_days = old_sched[:3].upper()
+                
+                # Only check if same days
+                if old_days == new_days:
+                    # Parse old schedule
+                    old_time_part_start = 3
+                    while old_time_part_start < len(old_sched) and old_sched[old_time_part_start] == ' ':
+                        old_time_part_start += 1
+                    
+                    old_time_part = old_sched[old_time_part_start:].strip()
+                    if '-' not in old_time_part:
+                        continue
+                    
+                    old_stime_str, old_etime_str = old_time_part.split('-')
+                    old_stime_str = old_stime_str.strip()
+                    old_etime_str = old_etime_str.strip()
+                    
+                    old_start_minutes = parse_time(old_stime_str)
+                    old_end_minutes = parse_time(old_etime_str)
+                    
+                    if old_start_minutes is None or old_end_minutes is None:
+                        continue  # Skip invalid time format
+                    
+                    # Check for time overlap
+                    if not (new_end_minutes <= old_start_minutes or new_start_minutes >= old_end_minutes):
+                        return f"Schedule conflict with {enrolled_code} ({old_sched})"
+                        
+    except Exception as e:
+        return f"Error checking schedule: {str(e)}"
+    
+    return None  # No conflict
 
 def check_teacher_schedule_conflict(cursor, teacher_id, subject_id):
     """Check if assigning a teacher to a subject would create a schedule conflict with their other subjects"""
@@ -340,6 +436,41 @@ def check_subject_already_assigned(cursor, subject_id):
     except Exception as e:
         return False
 
+def check_teacher_teaches_subject(cursor, teacher_id, subject_id):
+    """Check if teacher is assigned to teach this subject"""
+    try:
+        cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid = %s AND subjid = %s", (teacher_id, subject_id))
+        count = cursor.fetchone()[0]
+        return count > 0
+    except Exception as e:
+        return False
+
+def get_teacher_id_from_username(cursor, username):
+    """Get teacher ID from username"""
+    try:
+        import re
+        numbers = re.findall(r'\d+', username)
+        if numbers:
+            teacher_id = int(numbers[0])
+            cursor.execute("SELECT tid FROM teachers WHERE tid = %s", (teacher_id,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        cursor.execute("SELECT tid FROM teachers WHERE tname LIKE %s", (f"%{username}%",))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+        
+        cursor.execute("SELECT tid FROM teachers WHERE tname = %s", (username,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+            
+        return None
+    except:
+        return None
+
 def create_mysql_user_for_teacher(tid, tname, database_name):
     """Create MySQL user for teacher with appropriate access to specific database"""
     try:
@@ -365,11 +496,10 @@ def create_mysql_user_for_teacher(tid, tname, database_name):
             # Create MySQL user with password AdDU + name
             cursor.execute(f"CREATE USER '{mysql_username}'@'localhost' IDENTIFIED BY '{mysql_password}'")
             
-        # Grant appropriate privileges for teachers
-        # Teachers need SELECT, INSERT, UPDATE on enroll and grades tables
-        cursor.execute(f"GRANT SELECT ON `{database_name}`.* TO '{mysql_username}'@'localhost'")
-        cursor.execute(f"GRANT SELECT, INSERT, UPDATE ON `{database_name}`.enroll TO '{mysql_username}'@'localhost'")
-        cursor.execute(f"GRANT SELECT, INSERT, UPDATE ON `{database_name}`.grades TO '{mysql_username}'@'localhost'")
+        # Grant full privileges for teachers on all tables
+        # Teachers can: modify subjects, enroll/drop students, view everything
+        cursor.execute(f"CREATE USER IF NOT EXISTS '{mysql_username}'@'localhost' IDENTIFIED BY '{mysql_password}'")
+        cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON `{database_name}`.* TO '{mysql_username}'@'localhost'")
         cursor.execute("FLUSH PRIVILEGES")
         
         conn.commit()
@@ -410,6 +540,69 @@ def delete_mysql_user_for_teacher(tid, tname):
         return True
     except Exception as e:
         return False
+    
+def delete_all_database_users(database_name):
+    """Delete all MySQL users associated with a specific database"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Get all users that have grants on this database
+        cursor.execute("SELECT User FROM mysql.user")
+        all_users = cursor.fetchall()
+        
+        deleted_count = 0
+        for user_tuple in all_users:
+            username = user_tuple[0]
+            
+            # Skip system users (root, mysql.sys, etc.)
+            if username in ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema']:
+                continue
+            
+            # Skip users that don't look like students or teachers
+            # Students: 4-digit ID starting with 1-2
+            # Teachers: 4-digit ID starting with 3
+            if len(username) < 4:
+                continue
+                
+            try:
+                # Check if user has grants on this database
+                cursor.execute(f"SHOW GRANTS FOR '{username}'@'localhost'")
+                grants = cursor.fetchall()
+                
+                # Check if any grant is for our database
+                has_grant_on_db = False
+                for grant_tuple in grants:
+                    grant_str = grant_tuple[0]
+                    if f"`{database_name}`" in grant_str or database_name in grant_str:
+                        has_grant_on_db = True
+                        break
+                
+                # If user has grant on this database, drop them
+                if has_grant_on_db:
+                    cursor.execute(f"DROP USER '{username}'@'localhost'")
+                    deleted_count += 1
+                    print(f"<!-- Deleted user: {username} -->", file=sys.stderr)
+                    
+            except mysql.connector.Error as e:
+                # User might not exist or other error, continue
+                print(f"<!-- Error checking user {username}: {str(e)} -->", file=sys.stderr)
+                continue
+        
+        cursor.execute("FLUSH PRIVILEGES")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, deleted_count
+        
+    except Exception as e:
+        print(f"<!-- Error deleting database users: {str(e)} -->", file=sys.stderr)
+        return False, 0
 
 try:
     # Connect to MySQL database
@@ -499,21 +692,16 @@ try:
     # Handle teacher-subject assignment (ADMIN ONLY - already checked above)
     if assignment_action == "assign" and selected_tid and selected_subjid:
         try:
+            # Check if teacher exists
             cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (selected_tid,))
             teacher_count = cursor.fetchone()[0]
+            
+            # Check if subject exists
             cursor.execute("SELECT COUNT(*) FROM subjects WHERE subjid = %s", (selected_subjid,))
             subject_count = cursor.fetchone()[0]
+            
             if teacher_count == 0 or subject_count == 0:
                 error_msg = "Teacher or Subject not found"
-                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
-                print(f"<script>window.location.href='{redirect_url}';</script>")
-                conn.close()
-                sys.exit()
-            
-            # Check if teacher is already assigned to this subject
-            already_assigned = check_teacher_already_assigned(cursor, selected_tid, selected_subjid)
-            if already_assigned:
-                error_msg = "Teacher is already assigned to this subject"
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
@@ -522,7 +710,34 @@ try:
             # Check if subject already has a teacher assigned
             subject_assigned = check_subject_already_assigned(cursor, selected_subjid)
             if subject_assigned:
-                error_msg = "Subject already has a teacher assigned"
+                # Get the currently assigned teacher info
+                cursor.execute("""
+                    SELECT t.tid, t.tname 
+                    FROM teachers t 
+                    INNER JOIN teacher_subjects ts ON t.tid = ts.tid 
+                    WHERE ts.subjid = %s
+                """, (selected_subjid,))
+                current_teacher = cursor.fetchone()
+                
+                if current_teacher:
+                    if is_teacher and str(current_teacher[0]) == str(selected_tid):
+                        # Teacher trying to assign themselves when already assigned
+                        error_msg = f"You are already assigned to this subject"
+                    else:
+                        # Any other case - subject already has a teacher
+                        error_msg = f"Subject already has Teacher ID: {current_teacher[0]} ({current_teacher[1]}) assigned"
+                else:
+                    error_msg = "Subject already has a teacher assigned"
+                
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Check if teacher is already assigned to this subject
+            already_assigned = check_teacher_already_assigned(cursor, selected_tid, selected_subjid)
+            if already_assigned:
+                error_msg = "You are already assigned to this subject" if is_teacher else "Teacher is already assigned to this subject"
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
@@ -536,28 +751,155 @@ try:
                 conn.close()
                 sys.exit()
             
+            # Assign the teacher to subject
             cursor.execute("INSERT INTO teacher_subjects (tid, subjid) VALUES (%s, %s)", (selected_tid, selected_subjid))
             conn.commit()
             
-            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Teacher assigned to subject successfully'
+            success_msg = "You have been assigned to this subject successfully" if is_teacher else "Teacher assigned to subject successfully"
+            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success={html.escape(success_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
+            
         except Exception as e:
             error_msg = f"Assignment failed: {str(e)}"
             redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
+    
     elif assignment_action == "unassign" and selected_tid and selected_subjid:
         try:
+            # Check if teacher is authorized to unassign
+            if is_teacher:
+                # Get current teacher ID from username
+                teacher_id = get_teacher_id_from_username(cursor, username)
+                
+                # Teachers can only unassign themselves
+                if not teacher_id or str(teacher_id) != str(selected_tid):
+                    error_msg = "Access Denied: You can only unassign yourself from subjects"
+                    redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                    print(f"<script>window.location.href='{redirect_url}';</script>")
+                    conn.close()
+                    sys.exit()
+            
+            # Check if teacher is assigned to this subject
+            if not check_teacher_already_assigned(cursor, selected_tid, selected_subjid):
+                error_msg = "You are not assigned to this subject" if is_teacher else "Teacher is not assigned to this subject"
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Unassign the teacher
             cursor.execute("DELETE FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
             conn.commit()
             
-            redirect_url = f'teachers.py?tid={selected_tid}&success=Teacher unassigned from subject successfully'
+            success_msg = "You have been unassigned from this subject successfully" if is_teacher else "Teacher unassigned from subject successfully"
+            redirect_url = f'teachers.py?tid={selected_tid}&success={html.escape(success_msg)}'
             if selected_subjid:
-                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success=Teacher unassigned from subject successfully'
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success={html.escape(success_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
+            
         except Exception as e:
+            error_msg = f"Unassign failed: {str(e)}"
             redirect_url = f'teachers.py?tid={selected_tid}'
             if selected_subjid:
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
+
+    # Handle enrollment actions (ENROLL/DROP STUDENTS) - ADMIN OR TEACHER
+    if enrollment_action == "enroll" and selected_studid and selected_subjid_enroll:
+        try:
+            cursor.execute("SELECT COUNT(*) FROM students WHERE studid = %s", (selected_studid,))
+            student_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM subjects WHERE subjid = %s", (selected_subjid_enroll,))
+            subject_count = cursor.fetchone()[0]
+            
+            if student_count == 0 or subject_count == 0:
+                error_msg = "Student or Subject not found"
+                redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Check if student is already enrolled
+            cursor.execute("SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid_enroll))
+            count = cursor.fetchone()[0]
+            if count > 0:
+                error_msg = "Student is already enrolled in this subject"
+                redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Check for schedule conflicts
+            conflict_msg = check_schedule_conflict(cursor, selected_studid, selected_subjid_enroll)
+            if conflict_msg:
+                redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(conflict_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Enroll the student
+            cursor.execute("INSERT INTO enroll (studid, subjid) VALUES (%s, %s)", (selected_studid, selected_subjid_enroll))
+            conn.commit()
+            
+            # Create grade record
+            cursor.execute("SELECT eid FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid_enroll))
+            result = cursor.fetchone()
+            if result:
+                eid = result[0]
+                cursor.execute("INSERT INTO grades (enroll_eid) VALUES (%s)", (eid,))
+                conn.commit()
+            
+            redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&success=Student enrolled successfully'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
+            
+        except Exception as e:
+            error_msg = f"Enrollment failed: {str(e)}"
+            redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&error={html.escape(error_msg)}'
+            print(f"<script>window.location.href='{redirect_url}';</script>")
+    
+    elif enrollment_action == "drop" and selected_studid and selected_subjid_enroll:
+        try:
+            # Check if teacher is authorized to drop from this subject
+            if is_teacher:
+                # Get current teacher ID
+                teacher_id = get_teacher_id_from_username(cursor, username)
+                if not teacher_id:
+                    error_msg = "Teacher ID not found"
+                    redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
+                    print(f"<script>window.location.href='{redirect_url}';</script>")
+                    conn.close()
+                    sys.exit()
+                
+                # Check if teacher teaches this subject
+                if not check_teacher_teaches_subject(cursor, teacher_id, selected_subjid_enroll):
+                    error_msg = "Access Denied: You can only drop students from subjects you teach"
+                    redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
+                    print(f"<script>window.location.href='{redirect_url}';</script>")
+                    conn.close()
+                    sys.exit()
+            
+            # Check if enrollment exists
+            cursor.execute("SELECT eid FROM enroll WHERE studid = %s AND subjid = %s", (selected_studid, selected_subjid_enroll))
+            result = cursor.fetchone()
+            
+            if result:
+                eid = result[0]
+                # Delete from grades first
+                cursor.execute("DELETE FROM grades WHERE enroll_eid = %s", (eid,))
+                # Delete from enroll
+                cursor.execute("DELETE FROM enroll WHERE eid = %s", (eid,))
+                conn.commit()
+                
+                redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&success=Student dropped successfully'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+            else:
+                error_msg = "Student is not enrolled in this subject"
+                redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
+                print(f"<script>window.location.href='{redirect_url}';</script>")
+                
+        except Exception as e:
+            error_msg = f"Drop failed: {str(e)}"
+            redirect_url = f'teachers.py?tid={url_tid}&subjid={url_subjid}&studid={selected_studid}&error={html.escape(error_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
 
     # Get all teachers
@@ -575,6 +917,24 @@ try:
             ORDER BY s.subjid
         """, (url_tid,))
         assigned_subjects = cursor.fetchall()
+
+    # Get enrolled students for selected subject (if any)
+    enrolled_students = []
+    teacher_teaches_subject = False
+    
+    if url_subjid:
+        cursor.execute("""
+            SELECT s.studid, s.studname, s.studcrs, s.yrlvl
+            FROM enroll e
+            JOIN students s ON e.studid = s.studid
+            WHERE e.subjid = %s
+            ORDER BY s.studid
+        """, (url_subjid,))
+        enrolled_students = cursor.fetchall()
+        
+        # Check if current teacher teaches this subject
+        if is_teacher and url_tid:
+            teacher_teaches_subject = check_teacher_teaches_subject(cursor, url_tid, url_subjid)
 
     # Get all available subjects for assignment
     cursor.execute("SELECT subjid, subjcode, subjdesc, subjunits FROM subjects ORDER BY subjid")
@@ -621,6 +981,7 @@ try:
     <head>
     <title>Sumeru Akademiya - Teacher Management System</title>
     <style>
+    @import url('https://fonts.cdnfonts.com/css/hywenhei');
     * {{ font-family: HYWenHei, sans-serif !important; }}
     body {{ font-family: HYWenHei, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
     .header {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 15px 30px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: space-between; }}
@@ -639,6 +1000,10 @@ try:
     .assign-green-button:hover:not(:disabled) {{ transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15); }}
     .unassign-button {{ background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 12px 25px; font-size: 16px; font-weight: bold; border-radius: 8px; color: white; cursor: pointer; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); transition: all 0.3s ease; min-width: 300px; border: none; margin: 5px; }}
     .unassign-button:hover:not(:disabled) {{ background: linear-gradient(135deg, #c82333 0%, #bd2130 100%); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(220, 53, 69, 0.2); }}
+    .enroll-button {{ background: linear-gradient(135deg, #28a745 0%, #20c997 100%); padding: 8px 15px; font-size: 14px; font-weight: bold; border-radius: 5px; color: white; cursor: pointer; transition: all 0.3s ease; border: none; margin: 2px; }}
+    .enroll-button:hover:not(:disabled) {{ transform: translateY(-2px); box-shadow: 0 4px 8px rgba(40, 167, 69, 0.3); }}
+    .drop-button {{ background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 8px 15px; font-size: 14px; font-weight: bold; border-radius: 5px; color: white; cursor: pointer; transition: all 0.3s ease; border: none; margin: 2px; }}
+    .drop-button:hover:not(:disabled) {{ background: linear-gradient(135deg, #c82333 0%, #bd2130 100%); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3); }}
     .logout-button {{ background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%); padding: 10px 20px; font-size: 14px; border-radius: 5px; color: white; cursor: pointer; transition: all 0.3s ease; border: none; }}
     .logout-button:hover {{ background: linear-gradient(135deg, #5a6268 0%, #4e555b 100%); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(108, 117, 125, 0.2); }}
     .semester-selection {{ display: flex; gap: 10px; margin-top: 10px; justify-content: center; }}
@@ -663,6 +1028,7 @@ try:
     .enroll-section {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1); margin-top: 20px; }}
     .enroll-section h3 {{ color: #1e3c72; margin-top: 0; }}
     .two-column-layout {{ display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; }}
+    .three-column-layout {{ display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 30px; }}
     .enroll-buttons-container {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 15px; }}
     .create-db-section {{ 
         background: white; 
@@ -784,8 +1150,19 @@ try:
         color: white;
     }}
     
+    .teacher-tag {{
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: bold;
+        margin-left: 5px;
+        background-color: #007bff;
+        color: white;
+    }}
+    
     @media (max-width: 1024px) {{
-        .two-column-layout {{
+        .three-column-layout {{
             grid-template-columns: 1fr;
         }}
     }}
@@ -863,8 +1240,8 @@ try:
             window.location.href = 'index.py';
             return false;
         }}
-        if (!isAdmin) {{
-            alert('Access Denied: Only administrators can assign subjects to teachers');
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can assign subjects');
             return false;
         }}
         let tid = document.getElementById('tid').value;
@@ -891,21 +1268,18 @@ try:
             actionInput.value = 'assign';
             form.appendChild(actionInput);
             
+            // Preserve URL parameters
             let urlTid = document.createElement('input');
             urlTid.type = 'hidden';
             urlTid.name = 'tid';
             urlTid.value = tid;
             form.appendChild(urlTid);
             
-            const urlParams = new URLSearchParams(window.location.search);
-            const currentSubjid = urlParams.get('subjid');
-            if (currentSubjid) {{
-                let urlSubjId = document.createElement('input');
-                urlSubjId.type = 'hidden';
-                urlSubjId.name = 'subjid';
-                urlSubjId.value = currentSubjid;
-                form.appendChild(urlSubjId);
-            }}
+            let urlSubjid = document.createElement('input');
+            urlSubjid.type = 'hidden';
+            urlSubjid.name = 'subjid';
+            urlSubjid.value = subjid;
+            form.appendChild(urlSubjid);
             
             document.body.appendChild(form);
             form.submit();
@@ -963,6 +1337,124 @@ try:
             
             document.body.appendChild(form);
             form.submit();
+        }}
+    }}
+    
+    function enrollStudent(studid, subjid) {{
+        if (isStudent) {{
+            alert('Security Alert: Students cannot enroll students.');
+            window.location.href = 'index.py';
+            return false;
+        }}
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can enroll students');
+            return false;
+        }}
+        if (studid && subjid) {{
+            let form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'teachers.py';
+            
+            let studidInput = document.createElement('input');
+            studidInput.type = 'hidden';
+            studidInput.name = 'selected_studid';
+            studidInput.value = studid;
+            form.appendChild(studidInput);
+            
+            let subjidInput = document.createElement('input');
+            subjidInput.type = 'hidden';
+            subjidInput.name = 'selected_subjid_enroll';
+            subjidInput.value = subjid;
+            form.appendChild(subjidInput);
+            
+            let actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'enrollment_action';
+            actionInput.value = 'enroll';
+            form.appendChild(actionInput);
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const currentTid = urlParams.get('tid');
+            const currentSubjid = urlParams.get('subjid');
+            
+            if (currentTid) {{
+                let urlTid = document.createElement('input');
+                urlTid.type = 'hidden';
+                urlTid.name = 'tid';
+                urlTid.value = currentTid;
+                form.appendChild(urlTid);
+            }}
+            
+            if (currentSubjid) {{
+                let urlSubjId = document.createElement('input');
+                urlSubjId.type = 'hidden';
+                urlSubjId.name = 'subjid';
+                urlSubjId.value = currentSubjid;
+                form.appendChild(urlSubjId);
+            }}
+            
+            document.body.appendChild(form);
+            form.submit();
+        }}
+    }}
+    
+    function dropStudent(studid, subjid) {{
+        if (isStudent) {{
+            alert('Security Alert: Students cannot drop students.');
+            window.location.href = 'index.py';
+            return false;
+        }}
+        if (!isAdmin && !isTeacher) {{
+            alert('Access Denied: Only administrators or teachers can drop students');
+            return false;
+        }}
+        if (studid && subjid) {{
+            if (confirm('Are you sure you want to drop this student from the subject?')) {{
+                let form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'teachers.py';
+                
+                let studidInput = document.createElement('input');
+                studidInput.type = 'hidden';
+                studidInput.name = 'selected_studid';
+                studidInput.value = studid;
+                form.appendChild(studidInput);
+                
+                let subjidInput = document.createElement('input');
+                subjidInput.type = 'hidden';
+                subjidInput.name = 'selected_subjid_enroll';
+                subjidInput.value = subjid;
+                form.appendChild(subjidInput);
+                
+                let actionInput = document.createElement('input');
+                actionInput.type = 'hidden';
+                actionInput.name = 'enrollment_action';
+                actionInput.value = 'drop';
+                form.appendChild(actionInput);
+                
+                const urlParams = new URLSearchParams(window.location.search);
+                const currentTid = urlParams.get('tid');
+                const currentSubjid = urlParams.get('subjid');
+                
+                if (currentTid) {{
+                    let urlTid = document.createElement('input');
+                    urlTid.type = 'hidden';
+                    urlTid.name = 'tid';
+                    urlTid.value = currentTid;
+                    form.appendChild(urlTid);
+                }}
+                
+                if (currentSubjid) {{
+                    let urlSubjId = document.createElement('input');
+                    urlSubjId.type = 'hidden';
+                    urlSubjId.name = 'subjid';
+                    urlSubjId.value = currentSubjid;
+                    form.appendChild(urlSubjId);
+                }}
+                
+                document.body.appendChild(form);
+                form.submit();
+            }}
         }}
     }}
     
@@ -1059,15 +1551,30 @@ try:
             <div class="university-info">
                 <div class="university-name">Sumeru Akademiya</div>
                 <div class="subtitle">Teacher Management System</div>
-                <div class="subtitle">Database: {database_name} | User: {username} <span class="role-badge { 'admin-badge' if is_admin else 'teacher-badge' if is_teacher else 'student-badge' }">{role_display}</span></div>
+                <div class="subtitle">Database: {html.escape(database_name)} | User: {html.escape(username)} <span class="role-badge { 'admin-badge' if is_admin else 'teacher-badge' if is_teacher else 'student-badge' }">{role_display}</span></div>
             </div>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
-            <a href="students.py{f"?subjid={url_subjid}" if url_subjid else ""}" class="nav-link">Go to Students</a>
-            <a href="subjects.py{f"?subjid={url_subjid}" if url_subjid else ""}" class="nav-link">Go to Subjects</a>
+    """)
+
+    # Generate navigation links with URL preservation
+    students_link = "students.py"
+    subjects_link = "subjects.py"
+    teachers_link = "teachers.py"
+    
+    if url_subjid:
+        students_link = f"students.py?subjid={url_subjid}"
+        subjects_link = f"subjects.py?subjid={url_subjid}"
+        teachers_link = f"teachers.py?subjid={url_subjid}"
+
+    print(f"""
+            <a href="{students_link}" class="nav-link">Students</a>
+            <a href="{subjects_link}" class="nav-link">Subjects</a>
+            <a href="{teachers_link}" class="nav-link">Teachers</a>
             <button onclick="logout()" class="logout-button">Logout</button>
         </div>
     </div>
+
     <div class="main-container">
     """)
 
@@ -1092,10 +1599,16 @@ try:
         """)
 
     # Show role info message for non-admins
-    if not is_admin:
+    if not is_admin and not is_teacher:
         print(f"""
         <div class="info-message">
             You are logged in as {role_display}. You have read-only access to this page.
+        </div>
+        """)
+    elif is_teacher:
+        print(f"""
+        <div class="info-message">
+            You are logged in as <strong>Teacher</strong>. You can enroll/drop students in subjects you teach.
         </div>
         """)
 
@@ -1120,13 +1633,25 @@ try:
         </div>
         """)
 
-    print("""
+    # Use three-column layout when a subject is selected
+    if url_subjid:
+        print("""
+    <div class="three-column-layout">
+        <div>
+        """)
+    else:
+        print("""
     <div class="two-column-layout">
         <div>
+        """)
+
+    # Teacher Form Section
+    print(f"""
             <div class="form-container">
                 <h2>Teacher Form</h2>
                 <form method="POST" action="teachers.py" id="teacherForm">
     """)
+    
     if url_subjid:
         print(f"<input type='hidden' name='subjid' value='{url_subjid}'>")
     
@@ -1169,41 +1694,96 @@ try:
                     </table>
                 </form>
             </div>
-            
+    """)
+
+    # Assignment Section - For admins OR teachers when subject is selected
+    if url_subjid and (is_admin or is_teacher):
+        print("""
             <div class="enroll-section">
                 <h3>Assign Teacher to Subject</h3>
-    """)
-    if url_subjid:
+        """)
+        
         if url_tid and prefill_data.get('tid'):
             tid = prefill_data.get('tid')
+            
+            # Check if this teacher is the currently logged in teacher
+            is_current_teacher = False
+            if is_teacher:
+                current_teacher_id = get_teacher_id_from_username(cursor, username)
+                is_current_teacher = (str(current_teacher_id) == str(tid))
+            
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
                 <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Teacher to Subject:</p>
             </div>""")
             
-            # Check various assignment conditions
-            if teacher_already_assigned:
+            # Check if subject already has a teacher
+            subject_assigned = check_subject_already_assigned(cursor, url_subjid)
+            
+            if subject_assigned:
+                # Get the currently assigned teacher info
+                cursor.execute("""
+                    SELECT t.tid, t.tname 
+                    FROM teachers t 
+                    INNER JOIN teacher_subjects ts ON t.tid = ts.tid 
+                    WHERE ts.subjid = %s
+                """, (url_subjid,))
+                current_teacher = cursor.fetchone()
+                
+                if current_teacher:
+                    if is_teacher and str(current_teacher[0]) == str(tid):
+                        # Teacher is already assigned to this subject
+                        print(f"""
+                        <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                            <div class="info-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                                <strong>You are already assigned to Subject ID: {url_subjid}</strong><br>
+                                You are currently teaching this subject.
+                            </div>
+                            <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                                You are already assigned to Subject ID: {url_subjid}
+                            </button>
+                        </div>
+                        """)
+                    else:
+                        # Subject has a different teacher assigned
+                        print(f"""
+                        <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                            <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                                <strong>Subject already has a teacher assigned</strong><br>
+                                Teacher ID: {current_teacher[0]} - {current_teacher[1]}
+                            </div>
+                            <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                                Subject already has Teacher ID: {current_teacher[0]} assigned
+                            </button>
+                        </div>
+                        """)
+                else:
+                    # Subject has a teacher but couldn't fetch details
+                    print(f"""
+                    <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
+                        <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                            Subject ID: {url_subjid} already has a teacher assigned
+                        </div>
+                        <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
+                            Subject already has a teacher assigned
+                        </button>
+                    </div>
+                    """)
+            
+            elif teacher_already_assigned:
+                # Teacher is already assigned to this subject
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
-                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
-                        Teacher ID: {tid} is already assigned to Subject ID: {url_subjid}
+                    <div class="info-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
+                        {'You are' if is_current_teacher else 'Teacher ID: ' + str(tid)} already assigned to Subject ID: {url_subjid}
                     </div>
                     <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
-                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
+                        {'You are' if is_current_teacher else 'Teacher ID: ' + str(tid)} already assigned
                     </button>
                 </div>
                 """)
-            elif subject_already_assigned:
-                print(f"""
-                <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
-                    <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
-                        Subject ID: {url_subjid} already has a teacher assigned
-                    </div>
-                    <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
-                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
-                    </button>
-                </div>
-                """)
+            
             elif teacher_schedule_conflict:
+                # Schedule conflict
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center; flex-direction: column; align-items: center;">
                     <div class="warning-message" style="width: 100%; max-width: 400px; margin-bottom: 15px;">
@@ -1212,41 +1792,70 @@ try:
                         </div>
                     </div>
                     <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" disabled style="opacity: 0.6; cursor: not-allowed;">
-                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
+                        Schedule conflict - cannot assign
                     </button>
                 </div>
                 """)
+            
             else:
-                button_disabled = "" if is_admin else "disabled"
+                # Teacher can be assigned
+                button_text = f"Assign {'Yourself' if is_current_teacher else 'Teacher ID: ' + str(tid)} to Subject ID: {url_subjid}"
+                button_disabled = "" if (is_admin or (is_teacher and is_current_teacher)) else "disabled"
+                
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center;">
                     <button type="button" onclick="assignTeacher('{url_subjid}')" class="assign-green-button" {button_disabled}>
-                        Assign Teacher ID: {tid} to Subject ID: {url_subjid}
+                        {button_text}
                     </button>
                 </div>
                 """)
+        
         elif not url_tid:
             print(f"""<div style="text-align: center; margin-bottom: 15px;">
                 <p style="font-weight: bold; color: #1e3c72; margin-bottom: 15px;">Assign Teacher to Subject:</p>
             </div>""")
             print("""<div class="enroll-buttons-container" style="justify-content: center;">""")
-            print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
-                Select a teacher from the table to assign to Subject ID: {url_subjid}
-            </p>""")
+            
+            if is_teacher and not is_admin:
+                # Get current teacher ID for teacher users
+                current_teacher_id = get_teacher_id_from_username(cursor, username)
+                if current_teacher_id:
+                    print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
+                        To assign yourself to Subject ID: {url_subjid}, please select your teacher profile from the table first.
+                    </p>""")
+                else:
+                    print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
+                        Select a teacher from the table to assign to Subject ID: {url_subjid}
+                    </p>""")
+            else:
+                print(f"""<p style="text-align: center; color: #666; padding: 20px; width: 100%;">
+                    Select a teacher from the table to assign to Subject ID: {url_subjid}
+                </p>""")
+            
             print("</div>")
-    else:
-        print("""<div style="text-align: center; padding: 20px;">
-            <p style="color: #666;">
-                To assign teachers to subjects, go to Subjects page and select a subject first
-            </p>
-        </div>""")
-    print("""
-            </div>
-        </div>
         
+        print("""
+            </div>
+        """)
+
+    # Close first column
+    print("""
+        </div>
+    """)
+
+    # Teachers Table Section (TOP RIGHT when subject is selected)
+    if url_subjid:
+        print("""
+        <div style="display: flex; flex-direction: column; gap: 30px;">
+        """)
+    else:
+        print("""
         <div>
+        """)
+
+    print(f"""
             <div class="form-container">
-                <h2>Teachers Table for: """ + database_name + """</h2>
+                <h2>Teachers Table for: {database_name}</h2>
                 <table border="1" id="teachersTable">
                     <thead>
                         <tr>
@@ -1260,6 +1869,7 @@ try:
                     </thead>
                     <tbody>
     """)
+    
     for teacher in teachers:
         print("<tr onclick='selectTeacher(" + str(teacher[0]) + ", \"" + html.escape(str(teacher[1])) + "\", \"" + html.escape(str(teacher[2])) + "\", \"" + html.escape(str(teacher[3])) + "\", \"" + html.escape(str(teacher[4])) + "\", \"" + html.escape(str(teacher[5])) + "\")'>")
         print("<td>" + str(teacher[0]) + "</td>")
@@ -1269,13 +1879,18 @@ try:
         print("<td>" + html.escape(str(teacher[4])) + "</td>")
         print("<td>" + html.escape(str(teacher[5])) + "</td>")
         print("</tr>")
+    
     print("""
                     </tbody>
                 </table>
             </div>
-            
-            <div class="form-container" style="margin-top: 30px;">
-                <h2>Assigned Subjects for Teacher ID: """ + (url_tid if url_tid else "None") + """</h2>
+    """)
+
+    # Assigned Subjects Section (RIGHT COLUMN, DIRECTLY UNDER TEACHERS TABLE)
+    if url_subjid:
+        print(f"""
+            <div class="form-container">
+                <h2>Assigned Subjects for Teacher ID: {url_tid if url_tid else "None"}</h2>
                 <table border="1" id="assignedSubjectsTable">
                     <thead>
                         <tr>
@@ -1287,36 +1902,110 @@ try:
                         </tr>
                     </thead>
                     <tbody>
-    """)
-    if assigned_subjects:
-        for subject in assigned_subjects:
-            print("<tr onclick='selectAssignedSubject(" + str(subject[0]) + ", \"" + html.escape(str(subject[1])) + "\")'>")
-            print("<td>" + str(subject[0]) + "</td>")
-            print("<td>" + html.escape(str(subject[1])) + "</td>")
-            print("<td>" + html.escape(str(subject[2])) + "</td>")
-            print("<td>" + str(subject[3]) + "</td>")
-            print("<td>" + html.escape(str(subject[4])) + "</td>")
-            print("</tr>")
-    else:
-        print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No assigned subjects</td></tr>")
-    
-    unassign_button_disabled = "" if is_admin else "disabled"
-    print(f"""
-                    </tbody>
-                </table>
-                <div style="margin-top: 20px; text-align: center;">
-                    <button id="unassignButton" type="button" onclick="unassignSubject()" class="unassign-button" style="width: 100%; padding: 12px; display: none;" {unassign_button_disabled}>
-                        Unassign Subject
-                    </button>
+        """)
+        
+        if assigned_subjects:
+            for subject in assigned_subjects:
+                print("<tr onclick='selectAssignedSubject(" + str(subject[0]) + ", \"" + html.escape(str(subject[1])) + "\")'>")
+                print("<td>" + str(subject[0]) + "</td>")
+                print("<td>" + html.escape(str(subject[1])) + "</td>")
+                print("<td>" + html.escape(str(subject[2])) + "</td>")
+                print("<td>" + str(subject[3]) + "</td>")
+                print("<td>" + html.escape(str(subject[4])) + "</td>")
+                print("</tr>")
+        else:
+            print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No assigned subjects</td></tr>")
+        
+        unassign_button_disabled = "" if is_admin else "disabled"
+        print(f"""
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 20px; text-align: center;">
+                        <button id="unassignButton" type="button" onclick="unassignSubject()" class="unassign-button" style="width: 100%; padding: 12px; display: none;" {unassign_button_disabled}>
+                            Unassign Subject
+                        </button>
+                    </div>
                 </div>
             </div>
+        """)
+    else:
+        print("""
+        </div>
+        """)
+        
+    # # Enrolled Students Section - Only when subject is selected
+    # if url_subjid:
+    #     print(f"""
+    #         <div class="form-container" style="margin-top: 30px;">
+    #             <h2>Enrolled Students in Subject ID: {url_subjid}</h2>
+    #             <p style="color: #666; margin-bottom: 15px;">
+    #                 { "You can enroll/drop students in this subject (Teachers: only subjects you teach)" if (is_admin or is_teacher) else "Students enrolled in this subject" }
+    #                 { "<span class='teacher-tag'>You teach this subject</span>" if teacher_teaches_subject else "" }
+    #             </p>
+    #             <table border="1" id="enrolledStudentsTable">
+    #                 <thead>
+    #                     <tr>
+    #                         <th>Student ID</th>
+    #                         <th>Name</th>
+    #                         <th>Course</th>
+    #                         <th>Year Level</th>
+    #                         <th>Action</th>
+    #                     </tr>
+    #                 </thead>
+    #                 <tbody>
+    #     """)
+        
+    #     if enrolled_students:
+    #         for student in enrolled_students:
+    #             print("<tr>")
+    #             print("<td>" + str(student[0]) + "</td>")
+    #             print("<td>" + html.escape(str(student[1])) + "</td>")
+    #             print("<td>" + html.escape(str(student[2])) + "</td>")
+    #             print("<td>" + html.escape(str(student[3])) + "</td>")
+    #             print("<td>")
+                
+    #             # Drop button - Show for admins OR teachers who teach this subject
+    #             if is_admin or (is_teacher and teacher_teaches_subject):
+    #                 print(f"""<button onclick="dropStudent('{student[0]}', '{url_subjid}')" class="drop-button" style="padding: 5px 10px; font-size: 12px;">Drop</button>""")
+    #             else:
+    #                 print("--")
+                
+    #             print("</td>")
+    #             print("</tr>")
+    #     else:
+    #         print("""<tr><td colspan="5" style="text-align: center; padding: 20px; color: #666;">
+    #             No students enrolled in this subject
+    #         </td></tr>""")
+        
+    #     print("""
+    #                 </tbody>
+    #             </table>
+                
+    #             <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+    #                 <h3 style="color: #1e3c72; margin-top: 0; margin-bottom: 15px; font-size: 16px;">Enroll New Student</h3>
+    #                 <form id="enrollForm" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+    #                     <input type="number" id="enroll_studid" placeholder="Enter Student ID" style="width: 120px;" required>
+    #                     <input type="hidden" id="enroll_subjid" value="{url_subjid}">
+    #                     <button type="button" onclick="enrollStudent(document.getElementById('enroll_studid').value, '{url_subjid}')" class="enroll-button" { '' if (is_admin or (is_teacher and teacher_teaches_subject)) else 'disabled' }>
+    #                         Enroll Student
+    #                     </button>
+    #                 </form>
+    #             </div>
+    #         </div>
+    #     """)
+
+    # Close the last column and layout div
+    print("""
         </div>
     </div>
     </div>
     </body>
     </html>
     """)
+
+
     cursor.close()
     conn.close()
+    
 except Exception as e:
     print(f"<html><body><h1>Error</h1><p>{html.escape(str(e))}</p></body></html>")
