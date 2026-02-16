@@ -226,7 +226,7 @@ if action_type in ["insert", "update", "delete"] and not is_admin:
     sys.exit()
 
 # RBAC Check for assignment operations - ADMIN ONLY
-if assignment_action in ["assign", "unassign"] and not is_admin:
+if assignment_action in ["assign", "unassign"] and not is_admin and not is_teacher:
     print("<script>alert('Access Denied: Only administrators can assign/unassign subjects to teachers');window.location.href = 'teachers.py';</script>")
     sys.exit()
 
@@ -689,14 +689,12 @@ try:
         except Exception as e:
             print(f"<script>window.location.href='teachers.py?tid={tid}';</script>")
 
-    # Handle teacher-subject assignment (ADMIN ONLY - already checked above)
+        # Handle teacher-subject assignment (ADMIN ONLY - already checked above)
     if assignment_action == "assign" and selected_tid and selected_subjid:
         try:
-            # Check if teacher exists
             cursor.execute("SELECT COUNT(*) FROM teachers WHERE tid = %s", (selected_tid,))
             teacher_count = cursor.fetchone()[0]
             
-            # Check if subject exists
             cursor.execute("SELECT COUNT(*) FROM subjects WHERE subjid = %s", (selected_subjid,))
             subject_count = cursor.fetchone()[0]
             
@@ -707,34 +705,15 @@ try:
                 conn.close()
                 sys.exit()
             
-            # Check if subject already has a teacher assigned
-            subject_assigned = check_subject_already_assigned(cursor, selected_subjid)
-            if subject_assigned:
-                # Get the currently assigned teacher info
-                cursor.execute("""
-                    SELECT t.tid, t.tname 
-                    FROM teachers t 
-                    INNER JOIN teacher_subjects ts ON t.tid = ts.tid 
-                    WHERE ts.subjid = %s
-                """, (selected_subjid,))
-                current_teacher = cursor.fetchone()
-                
-                if current_teacher:
-                    if is_teacher and str(current_teacher[0]) == str(selected_tid):
-                        # Teacher trying to assign themselves when already assigned
-                        error_msg = f"You are already assigned to this subject"
-                    else:
-                        # Any other case - subject already has a teacher
-                        error_msg = f"Subject already has Teacher ID: {current_teacher[0]} ({current_teacher[1]}) assigned"
-                else:
-                    error_msg = "Subject already has a teacher assigned"
-                
-                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
-                print(f"<script>window.location.href='{redirect_url}';</script>")
-                conn.close()
-                sys.exit()
+            if is_teacher:
+                current_teacher_id = get_teacher_id_from_username(cursor, username)
+                if str(current_teacher_id) != str(selected_tid):
+                    error_msg = "Access Denied: Teachers can only assign themselves to subjects"
+                    redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                    print(f"<script>window.location.href='{redirect_url}';</script>")
+                    conn.close()
+                    sys.exit()
             
-            # Check if teacher is already assigned to this subject
             already_assigned = check_teacher_already_assigned(cursor, selected_tid, selected_subjid)
             if already_assigned:
                 error_msg = "You are already assigned to this subject" if is_teacher else "Teacher is already assigned to this subject"
@@ -743,7 +722,6 @@ try:
                 conn.close()
                 sys.exit()
             
-            # Check for teacher schedule conflict
             conflict_msg = check_teacher_schedule_conflict(cursor, selected_tid, selected_subjid)
             if conflict_msg:
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(conflict_msg)}'
@@ -751,7 +729,6 @@ try:
                 conn.close()
                 sys.exit()
             
-            # Assign the teacher to subject
             cursor.execute("INSERT INTO teacher_subjects (tid, subjid) VALUES (%s, %s)", (selected_tid, selected_subjid))
             conn.commit()
             
@@ -1800,7 +1777,7 @@ try:
             else:
                 # Teacher can be assigned
                 button_text = f"Assign {'Yourself' if is_current_teacher else 'Teacher ID: ' + str(tid)} to Subject ID: {url_subjid}"
-                button_disabled = "" if (is_admin or (is_teacher and is_current_teacher)) else "disabled"
+                button_disabled = "" if (is_admin or is_teacher) else "disabled"
                 
                 print(f"""
                 <div class="enroll-buttons-container" style="justify-content: center;">
