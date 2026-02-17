@@ -225,9 +225,9 @@ if action_type in ["insert", "update", "delete"] and not is_admin:
     print("<script>alert('Access Denied: Only administrators can modify teacher records');window.location.href = 'teachers.py';</script>")
     sys.exit()
 
-# RBAC Check for assignment operations - ADMIN ONLY
-if assignment_action in ["assign", "unassign"] and not is_admin and not is_teacher:
-    print("<script>alert('Access Denied: Only administrators can assign/unassign subjects to teachers');window.location.href = 'teachers.py';</script>")
+# RBAC Check for assignment operations - ADMIN OR TEACHER
+if assignment_action in ["assign", "unassign"] and not (is_admin or is_teacher):
+    print("<script>alert('Access Denied: Only administrators or teachers can assign/unassign subjects');window.location.href = 'teachers.py';</script>")
     sys.exit()
 
 # RBAC Check for enrollment operations - ADMIN OR TEACHER
@@ -499,7 +499,7 @@ def create_mysql_user_for_teacher(tid, tname, database_name):
         # Grant full privileges for teachers on all tables
         # Teachers can: modify subjects, enroll/drop students, view everything
         cursor.execute(f"CREATE USER IF NOT EXISTS '{mysql_username}'@'localhost' IDENTIFIED BY '{mysql_password}'")
-        cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON `{database_name}`.* TO '{mysql_username}'@'localhost'")
+        cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `{database_name}`.* TO '{mysql_username}'@'localhost'")
         cursor.execute("FLUSH PRIVILEGES")
         
         conn.commit()
@@ -707,7 +707,7 @@ try:
             
             if is_teacher:
                 current_teacher_id = get_teacher_id_from_username(cursor, username)
-                if str(current_teacher_id) != str(selected_tid):
+                if str(current_teacher_id) == str(selected_tid):
                     error_msg = "Access Denied: Teachers can only assign themselves to subjects"
                     redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                     print(f"<script>window.location.href='{redirect_url}';</script>")
@@ -743,44 +743,67 @@ try:
     
     elif assignment_action == "unassign" and selected_tid and selected_subjid:
         try:
-            # Check if teacher is authorized to unassign
-            if is_teacher:
-                # Get current teacher ID from username
-                teacher_id = get_teacher_id_from_username(cursor, username)
-                
-                # Teachers can only unassign themselves
-                if not teacher_id or str(teacher_id) != str(selected_tid):
-                    error_msg = "Access Denied: You can only unassign yourself from subjects"
-                    redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
-                    print(f"<script>window.location.href='{redirect_url}';</script>")
-                    conn.close()
-                    sys.exit()
+            # Teachers can unassign ANY teacher (no restriction)
+            # Admins can also unassign any teacher
             
             # Check if teacher is assigned to this subject
-            if not check_teacher_already_assigned(cursor, selected_tid, selected_subjid):
-                error_msg = "You are not assigned to this subject" if is_teacher else "Teacher is not assigned to this subject"
+            cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                error_msg = "Teacher is not assigned to this subject"
+                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+                print(f"<script>alert('{error_msg}');window.location.href='{redirect_url}';</script>")
+                conn.close()
+                sys.exit()
+            
+            # Unassign the teacher from the subject
+            cursor.execute("DELETE FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
+            conn.commit()
+            
+            # Redirect with success message
+            success_msg = "Teacher unassigned from subject successfully"
+            redirect_url = f'teachers.py?tid={selected_tid}&success={html.escape(success_msg)}'
+            print(f"<script>alert('{success_msg}');window.location.href='{redirect_url}';</script>")
+            conn.close()
+            sys.exit()
+            
+        except Exception as e:
+            error_msg = f"Unassign failed: {str(e)}"
+            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
+            print(f"<script>alert('{error_msg}');window.location.href='{redirect_url}';</script>")
+            conn.close()
+            sys.exit()
+            
+            # Check if teacher is assigned to this subject
+            cursor.execute("SELECT COUNT(*) FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                error_msg = "Teacher is not assigned to this subject"
                 redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
                 print(f"<script>window.location.href='{redirect_url}';</script>")
                 conn.close()
                 sys.exit()
             
-            # Unassign the teacher
+            # Unassign the teacher from the subject
             cursor.execute("DELETE FROM teacher_subjects WHERE tid = %s AND subjid = %s", (selected_tid, selected_subjid))
             conn.commit()
             
+            # Redirect with success message
             success_msg = "You have been unassigned from this subject successfully" if is_teacher else "Teacher unassigned from subject successfully"
             redirect_url = f'teachers.py?tid={selected_tid}&success={html.escape(success_msg)}'
-            if selected_subjid:
-                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&success={html.escape(success_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
+            conn.close()
+            sys.exit()
             
         except Exception as e:
             error_msg = f"Unassign failed: {str(e)}"
-            redirect_url = f'teachers.py?tid={selected_tid}'
-            if selected_subjid:
-                redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}'
+            redirect_url = f'teachers.py?tid={selected_tid}&subjid={selected_subjid}&error={html.escape(error_msg)}'
             print(f"<script>window.location.href='{redirect_url}';</script>")
-
+            conn.close()
+            sys.exit()
+        
     # Handle enrollment actions (ENROLL/DROP STUDENTS) - ADMIN OR TEACHER
     if enrollment_action == "enroll" and selected_studid and selected_subjid_enroll:
         try:
@@ -1170,18 +1193,26 @@ try:
         window.location.href = newUrl;
     }}
     
-    function selectAssignedSubject(subjid, subjcode) {{
-        selectedAssignedSubjectId = subjid;
-        let rows = document.querySelectorAll('#assignedSubjectsTable tr');
-        rows.forEach(row => row.classList.remove('selected-row'));
-        let rowsArray = Array.from(rows);
-        for (let row of rowsArray) {{
-            let firstCell = row.querySelector('td:first-child');
-            if (firstCell && firstCell.textContent === subjid) {{
-                row.classList.add('selected-row');
-                break;
-            }}
+function selectAssignedSubject(subjid, subjcode) {{
+    selectedAssignedSubjectId = subjid;
+    let rows = document.querySelectorAll('#assignedSubjectsTable tr');
+    rows.forEach(row => row.classList.remove('selected-row'));
+    let rowsArray = Array.from(rows);
+    for (let row of rowsArray) {{
+        let firstCell = row.querySelector('td:first-child');
+        if (firstCell && firstCell.textContent === subjid) {{
+            row.classList.add('selected-row');
+            break;
         }}
+    }}
+    
+    let unassignButton = document.getElementById('unassignButton');
+    if (unassignButton && selectedTeacherId && selectedAssignedSubjectId) {{
+        unassignButton.style.display = 'block';
+        unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
+        unassignButton.disabled = !(isAdmin || isTeacher);  //  Enable for admins AND teachers
+    }}
+}}
         
         let unassignButton = document.getElementById('unassignButton');
         if (unassignButton && selectedTeacherId && selectedAssignedSubjectId) {{
@@ -1189,7 +1220,7 @@ try:
             unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
             unassignButton.disabled = !isAdmin;
         }}
-    }}
+
     
     function submitForm(action) {{
         if (isStudent) {{
@@ -1263,59 +1294,59 @@ try:
         }}
     }}
     
-    function unassignSubject() {{
-        if (isStudent) {{
-            alert('Security Alert: Students cannot unassign teachers from subjects.');
-            window.location.href = 'index.py';
-            return false;
-        }}
-        if (!isAdmin) {{
-            alert('Access Denied: Only administrators can unassign teachers from subjects');
-            return false;
-        }}
-        if (selectedTeacherId && selectedAssignedSubjectId) {{
-            let form = document.createElement('form');
-            form.method = 'POST';
-            form.action = 'teachers.py';
-            
-            let tidInput = document.createElement('input');
-            tidInput.type = 'hidden';
-            tidInput.name = 'selected_tid';
-            tidInput.value = selectedTeacherId;
-            form.appendChild(tidInput);
-            
-            let subjidInput = document.createElement('input');
-            subjidInput.type = 'hidden';
-            subjidInput.name = 'selected_subjid';
-            subjidInput.value = selectedAssignedSubjectId;
-            form.appendChild(subjidInput);
-            
-            let actionInput = document.createElement('input');
-            actionInput.type = 'hidden';
-            actionInput.name = 'assignment_action';
-            actionInput.value = 'unassign';
-            form.appendChild(actionInput);
-            
-            let urlTid = document.createElement('input');
-            urlTid.type = 'hidden';
-            urlTid.name = 'tid';
-            urlTid.value = selectedTeacherId;
-            form.appendChild(urlTid);
-            
-            const urlParams = new URLSearchParams(window.location.search);
-            const currentSubjid = urlParams.get('subjid');
-            if (currentSubjid) {{
-                let urlSubjId = document.createElement('input');
-                urlSubjId.type = 'hidden';
-                urlSubjId.name = 'subjid';
-                urlSubjId.value = currentSubjid;
-                form.appendChild(urlSubjId);
-            }}
-            
-            document.body.appendChild(form);
-            form.submit();
-        }}
+function unassignSubject() {{
+    if (isStudent) {{
+        alert('Security Alert: Students cannot unassign teachers from subjects.');
+        window.location.href = 'index.py';
+        return false;
     }}
+    if (!isAdmin && !isTeacher) {{
+        alert('Access Denied: Only administrators or teachers can unassign teachers from subjects');
+        return false;
+    }}
+    if (selectedTeacherId && selectedAssignedSubjectId) {{
+        let form = document.createElement('form');
+        form.method = 'POST';
+        form.action = 'teachers.py';
+        
+        let tidInput = document.createElement('input');
+        tidInput.type = 'hidden';
+        tidInput.name = 'selected_tid';
+        tidInput.value = selectedTeacherId;
+        form.appendChild(tidInput);
+        
+        let subjidInput = document.createElement('input');
+        subjidInput.type = 'hidden';
+        subjidInput.name = 'selected_subjid';
+        subjidInput.value = selectedAssignedSubjectId;
+        form.appendChild(subjidInput);
+        
+        let actionInput = document.createElement('input');
+        actionInput.type = 'hidden';
+        actionInput.name = 'assignment_action';
+        actionInput.value = 'unassign';
+        form.appendChild(actionInput);
+        
+        let urlTid = document.createElement('input');
+        urlTid.type = 'hidden';
+        urlTid.name = 'tid';
+        urlTid.value = selectedTeacherId;
+        form.appendChild(urlTid);
+        
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentSubjid = urlParams.get('subjid');
+        if (currentSubjid) {{
+            let urlSubjId = document.createElement('input');
+            urlSubjId.type = 'hidden';
+            urlSubjId.name = 'subjid';
+            urlSubjId.value = currentSubjid;
+            form.appendChild(urlSubjId);
+        }}
+        
+        document.body.appendChild(form);
+        form.submit();
+    }}
+}}
     
     function enrollStudent(studid, subjid) {{
         if (isStudent) {{
@@ -1484,41 +1515,41 @@ try:
         }}
     }}
     
-    window.onload = function() {{
-        const urlParams = new URLSearchParams(window.location.search);
-        const tid = urlParams.get('tid');
-        const subjid = urlParams.get('subjid');
-        
-        if (tid) {{
-            selectedTeacherId = tid;
-            let rows = document.querySelectorAll('#teachersTable tr');
-            for (let row of rows) {{
-                let firstCell = row.querySelector('td:first-child');
-                if (firstCell && firstCell.textContent === tid) {{
-                    row.classList.add('selected-row');
-                    break;
-                }}
+window.onload = function() {{
+    const urlParams = new URLSearchParams(window.location.search);
+    const tid = urlParams.get('tid');
+    const subjid = urlParams.get('subjid');
+    
+    if (tid) {{
+        selectedTeacherId = tid;
+        let rows = document.querySelectorAll('#teachersTable tr');
+        for (let row of rows) {{
+            let firstCell = row.querySelector('td:first-child');
+            if (firstCell && firstCell.textContent === tid) {{
+                row.classList.add('selected-row');
+                break;
             }}
         }}
-        
-        if (subjid && tid) {{
-            let subjectRows = document.querySelectorAll('#assignedSubjectsTable tr');
-            for (let row of subjectRows) {{
-                let firstCell = row.querySelector('td:first-child');
-                if (firstCell && firstCell.textContent === subjid) {{
-                    row.classList.add('selected-row');
-                    selectedAssignedSubjectId = subjid;
-                    let unassignButton = document.getElementById('unassignButton');
-                    if (unassignButton) {{
-                        unassignButton.style.display = 'block';
-                        unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
-                        unassignButton.disabled = !isAdmin;
-                    }}
-                    break;
+    }}
+    
+    if (subjid && tid) {{
+        let subjectRows = document.querySelectorAll('#assignedSubjectsTable tr');
+        for (let row of subjectRows) {{
+            let firstCell = row.querySelector('td:first-child');
+            if (firstCell && firstCell.textContent === subjid) {{
+                row.classList.add('selected-row');
+                selectedAssignedSubjectId = subjid;
+                let unassignButton = document.getElementById('unassignButton');
+                if (unassignButton) {{
+                    unassignButton.style.display = 'block';
+                    unassignButton.innerHTML = 'Unassign Teacher ID: ' + selectedTeacherId + ' from Subject ID: ' + selectedAssignedSubjectId;
+                    unassignButton.disabled = !(isAdmin || isTeacher);  // Enable for admins AND teachers
                 }}
+                break;
             }}
         }}
-    }};
+    }}
+}};
     </script>
     </head>
     <body>
@@ -1893,18 +1924,18 @@ try:
         else:
             print("<tr><td colspan='5' style='text-align: center; padding: 20px; color: #666;'>No assigned subjects</td></tr>")
         
-        unassign_button_disabled = "" if is_admin else "disabled"
+        unassign_button_disabled = "" if (is_admin or is_teacher) else "disabled"  # Enable for admins AND teachers
         print(f"""
-                        </tbody>
-                    </table>
-                    <div style="margin-top: 20px; text-align: center;">
-                        <button id="unassignButton" type="button" onclick="unassignSubject()" class="unassign-button" style="width: 100%; padding: 12px; display: none;" {unassign_button_disabled}>
-                            Unassign Subject
-                        </button>
+                                </tbody>
+                            </table>
+                            <div style="margin-top: 20px; text-align: center;">
+                                <button id="unassignButton" type="button" onclick="unassignSubject()" class="unassign-button" style="width: 100%; padding: 12px; display: none;" {unassign_button_disabled}>
+                                    Unassign Subject
+                                </button>
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-        """)
+                """)
     else:
         print("""
         </div>
