@@ -80,7 +80,6 @@ if save_action == "1":
         )
         cursor = conn.cursor()
 
-        # Get all form values for grades
         for key in form.keys():
             if key.startswith("prelim_") or key.startswith("midterm_") or key.startswith("prefinal_") or key.startswith("final_"):
                 parts = key.split("_")
@@ -98,7 +97,6 @@ if save_action == "1":
                     elif grade_type == "final":
                         cursor.execute("UPDATE grades SET final = %s WHERE enroll_eid = %s", (grade_value, eid))
                 else:
-                    # Save NG as NULL or keep as NG
                     if grade_type == "prelim":
                         cursor.execute("UPDATE grades SET prelim = %s WHERE enroll_eid = %s", (grade_value if grade_value else None, eid))
                     elif grade_type == "midterm":
@@ -147,7 +145,6 @@ try:
 
     if schema_changed:
         conn.commit()
-        # Close and reconnect so MySQL reflects the new schema
         cursor.close()
         conn.close()
         conn = mysql.connector.connect(
@@ -170,7 +167,7 @@ try:
             GROUP BY s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched
             ORDER BY s.subjid
         """, (teacher_id,))
-    else:  # Admin can see all subjects
+    else:
         cursor.execute("""
             SELECT s.subjid, s.subjcode, s.subjdesc, s.subjunits, s.subjsched,
                    COUNT(DISTINCT e.studid) as num_students
@@ -197,7 +194,7 @@ try:
         """, (subjid,))
         enrolled_students_by_subject[subjid] = cursor.fetchall()
 
-    # Get SHOW GRANTS for the logged-in user
+    # Get SHOW GRANTS
     user_grants = []
     if not is_admin:
         try:
@@ -212,10 +209,8 @@ try:
         except:
             pass
 
-    # Grade options
     grade_options = ['A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F', 'INC', 'NG']
 
-    # HTML output
     print(f"""
     <html>
     <head>
@@ -244,6 +239,10 @@ try:
             .info-text {{ color: #666; font-size: 14px; margin-bottom: 15px; }}
             .grants-box {{ background: #f0f8ff; border-left: 4px solid #1e3c72; padding: 15px; margin-top: 15px; border-radius: 4px; font-size: 13px; font-family: monospace !important; word-break: break-all; }}
             .grants-box p {{ margin: 4px 0; }}
+            .subjid-link {{ color: #1a0dab; text-decoration: underline; cursor: pointer; font-weight: bold; }}
+            .subjid-link:hover {{ color: #d62c1a; }}
+            .students-section {{ display: none; }}
+            .students-section.open {{ display: block; }}
         </style>
         <script>
             function logout() {{
@@ -258,6 +257,19 @@ try:
                     form.appendChild(logoutInput);
                     document.body.appendChild(form);
                     form.submit();
+                }}
+            }}
+
+            function showStudents(subjid) {{
+                // Hide all student sections first
+                document.querySelectorAll('.students-section').forEach(function(el) {{
+                    el.classList.remove('open');
+                }});
+                // Show the selected one
+                var section = document.getElementById('students_' + subjid);
+                if (section) {{
+                    section.classList.add('open');
+                    section.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
                 }}
             }}
         </script>
@@ -302,10 +314,11 @@ try:
             </div>
         """)
     else:
-        # --- Assigned Subjects summary table (all subjects in one table) ---
+        # Assigned Subjects summary table
         print("""
             <div class="section">
                 <h2>Assigned Subjects</h2>
+                <p class="info-text">Click a Subject ID to view and encode grades for that subject.</p>
                 <table>
                     <thead>
                         <tr>
@@ -323,7 +336,7 @@ try:
             subjid, subjcode, subjdesc, subjunits, subjsched, num_students = subject
             print(f"""
                         <tr>
-                            <td>{subjid}</td>
+                            <td><span class="subjid-link" onclick="showStudents({subjid})">{subjid}</span></td>
                             <td>{html.escape(str(subjcode))}</td>
                             <td>{html.escape(str(subjdesc))}</td>
                             <td>{subjunits}</td>
@@ -337,13 +350,13 @@ try:
             </div>
         """)
 
-        # --- Enrolled Students per subject ---
+        # Enrolled Students per subject - all rendered but hidden by default
         for subject in assigned_subjects:
             subjid, subjcode, subjdesc, subjunits, subjsched, num_students = subject
             enrolled_students = enrolled_students_by_subject.get(subjid, [])
 
             print(f"""
-            <div class="section">
+            <div class="section students-section" id="students_{subjid}">
                 <h2>Enrolled Students - {html.escape(str(subjcode))}: {html.escape(str(subjdesc))}</h2>
                 <p class="info-text">Click a student row to edit grades. Save button is below the table.</p>
                 <table>
@@ -366,10 +379,10 @@ try:
                 for student in enrolled_students:
                     eid, studid, studname, prelim, midterm, prefinal, final = student
 
-                    prelim_val = prelim if prelim else "NG"
-                    midterm_val = midterm if midterm else "NG"
+                    prelim_val   = prelim   if prelim   else "NG"
+                    midterm_val  = midterm  if midterm  else "NG"
                     prefinal_val = prefinal if prefinal else "NG"
-                    final_val = final if final else "NG"
+                    final_val    = final    if final    else "NG"
 
                     print(f"""
                     <tr>

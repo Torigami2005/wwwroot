@@ -1039,6 +1039,7 @@ elif login_error:
 <head>
     <title>STUDENT INFORMATION SYSTEM</title>
     <style>
+    @import url('https://fonts.cdnfonts.com/css/hywenhei');
         * {{
             font-family: HYWenHei, sans-serif !important;
         }}
@@ -1233,6 +1234,7 @@ else:
     <head>
         <title>STUDENT INFORMATION SYSTEM</title>
         <style>
+        @import url('https://fonts.cdnfonts.com/css/hywenhei');
             * {
                 font-family: HYWenHei, sans-serif !important;
             }
