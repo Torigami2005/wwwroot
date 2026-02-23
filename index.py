@@ -413,8 +413,32 @@ if is_logged_in and form.getvalue("database"):
         print(f"Set-Cookie: user_role={user_role}; path=/; SameSite=Lax")
         print()
         
-        # Redirect based on user role
-        if is_admin or is_teacher:
+        # # Redirect based on user role
+        # if is_admin or is_teacher:
+        #     print(f"""
+        #     <html>
+        #     <head>
+        #         <meta http-equiv="refresh" content="0;url=students.py">
+        #     </head>
+        #     <body>
+        #         <p>Redirecting to students page...</p>
+        #     </body>
+        #     </html>
+        #     """)
+        # elif is_student:
+        #     print(f"""
+        #     <html>
+        #     <head>
+        #         <meta http-equiv="refresh" content="0;url=subjects.py">
+        #     </head>
+        #     <body>
+        #         <p>Redirecting to subjects page...</p>
+        #     </body>
+        #     </html>
+        #     """)
+        
+                # Redirect based on user role
+        if is_admin:
             print(f"""
             <html>
             <head>
@@ -425,14 +449,25 @@ if is_logged_in and form.getvalue("database"):
             </body>
             </html>
             """)
+        elif is_teacher:
+            print(f"""
+            <html>
+            <head>
+                <meta http-equiv="refresh" content="0;url=encodegrades.py">
+            </head>
+            <body>
+                <p>Redirecting to grade encoding page...</p>
+            </body>
+            </html>
+            """)
         elif is_student:
             print(f"""
             <html>
             <head>
-                <meta http-equiv="refresh" content="0;url=subjects.py">
+                <meta http-equiv="refresh" content="0;url=studrec.py">
             </head>
             <body>
-                <p>Redirecting to subjects page...</p>
+                <p>Redirecting to grade sheet...</p>
             </body>
             </html>
             """)
@@ -508,8 +543,32 @@ if is_logged_in and database_name:
             """)
             sys.exit()
     
-    print()
-    if is_admin or is_teacher:
+    # print()
+    # if is_admin or is_teacher:
+    #     print(f"""
+    #     <html>
+    #     <head>
+    #         <meta http-equiv="refresh" content="0;url=students.py">
+    #     </head>
+    #     <body>
+    #         <p>Redirecting to students page...</p>
+    #     </body>
+    #     </html>
+    #     """)
+    # elif is_student:
+    #     print(f"""
+    #     <html>
+    #     <head>
+    #         <meta http-equiv="refresh" content="0;url=subjects.py">
+    #     </head>
+    #     <body>
+    #         <p>Redirecting to subjects page...</p>
+    #     </body>
+    #     </html>
+    #     """)
+    
+        print()
+    if is_admin:
         print(f"""
         <html>
         <head>
@@ -520,14 +579,25 @@ if is_logged_in and database_name:
         </body>
         </html>
         """)
+    elif is_teacher:
+        print(f"""
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="0;url=encodegrades.py">
+        </head>
+        <body>
+            <p>Redirecting to grade encoding page...</p>
+        </body>
+        </html>
+        """)
     elif is_student:
         print(f"""
         <html>
         <head>
-            <meta http-equiv="refresh" content="0;url=subjects.py">
+            <meta http-equiv="refresh" content="0;url=studrec.py">
         </head>
         <body>
-            <p>Redirecting to subjects page...</p>
+            <p>Redirecting to grade sheet...</p>
         </body>
         </html>
         """)
@@ -882,21 +952,40 @@ if is_logged_in:
             </div>
         """)
     
-    # Show role-specific instructions
+    # # Show role-specific instructions
+    # if is_student:
+    #     print(f"""
+    #         <div class="info-message">
+    #             You are logged in as <strong>Student</strong>. You will be redirected to the Subjects page where you can view your enrolled subjects.
+    #         </div>
+    #     """)
+    # elif is_teacher:
+    #     print(f"""
+    #         <div class="info-message">
+    #             You are logged in as <strong>Teacher</strong>. You can:
+    #             <ul style="margin: 10px 0; padding-left: 20px;">
+    #                 <li>Modify subjects (insert, update, delete)</li>
+    #                 <li>Enroll/drop students from subjects you teach</li>
+    #                 <li>View all students and subjects</li>
+    #             </ul>
+    #         </div>
+    #     """)
+    
+        # Show role-specific instructions
     if is_student:
         print(f"""
             <div class="info-message">
-                You are logged in as <strong>Student</strong>. You will be redirected to the Subjects page where you can view your enrolled subjects.
+                You are logged in as <strong>Student</strong>. You will be redirected to your Grade Sheet page where you can view your grades.
             </div>
         """)
     elif is_teacher:
         print(f"""
             <div class="info-message">
-                You are logged in as <strong>Teacher</strong>. You can:
+                You are logged in as <strong>Teacher</strong>. You will be redirected to the Grade Encoding page where you can:
                 <ul style="margin: 10px 0; padding-left: 20px;">
-                    <li>Modify subjects (insert, update, delete)</li>
-                    <li>Enroll/drop students from subjects you teach</li>
-                    <li>View all students and subjects</li>
+                    <li>View subjects assigned to you</li>
+                    <li>Encode grades for enrolled students</li>
+                    <li>Save grades for all grading periods</li>
                 </ul>
             </div>
         """)
