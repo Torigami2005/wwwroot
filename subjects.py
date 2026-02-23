@@ -369,9 +369,8 @@ def get_student_id_from_username(cursor, username):
         return None
     except:
         return None
-    
-def delete_all_database_users(database_name):
-    """Delete all MySQL users associated with a specific database"""
+def revoke_database_permissions(database_name):
+    """Revoke permissions for users on a specific database (don't delete users)"""
     try:
         conn = mysql.connector.connect(
             host="localhost",
@@ -384,7 +383,7 @@ def delete_all_database_users(database_name):
         cursor.execute("SELECT User FROM mysql.user")
         all_users = cursor.fetchall()
         
-        deleted_count = 0
+        revoked_count = 0
         for user_tuple in all_users:
             username = user_tuple[0]
             
@@ -393,8 +392,6 @@ def delete_all_database_users(database_name):
                 continue
             
             # Skip users that don't look like students or teachers
-            # Students: 4-digit ID starting with 1-2
-            # Teachers: 4-digit ID starting with 3
             if len(username) < 4:
                 continue
                 
@@ -411,14 +408,14 @@ def delete_all_database_users(database_name):
                         has_grant_on_db = True
                         break
                 
-                # If user has grant on this database, drop them
+                # If user has grant on this database, REVOKE (not DROP)
                 if has_grant_on_db:
-                    cursor.execute(f"DROP USER '{username}'@'localhost'")
-                    deleted_count += 1
-                    print(f"<!-- Deleted user: {username} -->", file=sys.stderr)
+                    # Revoke all privileges on this specific database
+                    cursor.execute(f"REVOKE ALL PRIVILEGES ON `{database_name}`.* FROM '{username}'@'localhost'")
+                    revoked_count += 1
+                    print(f"<!-- Revoked permissions for user: {username} on database: {database_name} -->", file=sys.stderr)
                     
             except mysql.connector.Error as e:
-                # User might not exist or other error, continue
                 print(f"<!-- Error checking user {username}: {str(e)} -->", file=sys.stderr)
                 continue
         
@@ -427,10 +424,10 @@ def delete_all_database_users(database_name):
         cursor.close()
         conn.close()
         
-        return True, deleted_count
+        return True, revoked_count
         
     except Exception as e:
-        print(f"<!-- Error deleting database users: {str(e)} -->", file=sys.stderr)
+        print(f"<!-- Error revoking database permissions: {str(e)} -->", file=sys.stderr)
         return False, 0
 
 try:
@@ -1354,7 +1351,7 @@ try:
     <body>
         <div class="header">
             <div class="header-left">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Genshin_Impact_logo.svg/2560px-Genshin_Impact_logo.svg.png" alt="Genshin Impact Logo" class="logo">
+                <img src="sumeru.jpg" alt="Genshin Impact Logo" class="logo">
                 <div class="university-info">
                     <div class="university-name">Sumeru Akademiya</div>
                     <div class="subtitle">Subject Management System</div>

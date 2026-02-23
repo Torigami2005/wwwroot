@@ -214,6 +214,113 @@ if not is_logged_in and login_attempt == "1" and username and password:
                 
         except mysql.connector.Error as e:
             login_error = "Database error. Please contact administrator."
+            
+
+
+
+def revoke_database_permissions(database_name):
+    """Revoke permissions for users on a specific database (don't delete users)"""
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        # Get all users that have grants on this database
+        cursor.execute("SELECT User FROM mysql.user")
+        all_users = cursor.fetchall()
+        
+        revoked_count = 0
+        for user_tuple in all_users:
+            username = user_tuple[0]
+            
+            # Skip system users (root, mysql.sys, etc.)
+            if username in ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema']:
+                continue
+            
+            # Skip users that don't look like students or teachers
+            if len(username) < 4:
+                continue
+                
+            try:
+                # Check if user has grants on this database
+                cursor.execute(f"SHOW GRANTS FOR '{username}'@'localhost'")
+                grants = cursor.fetchall()
+                
+                # Check if any grant is for our database
+                has_grant_on_db = False
+                for grant_tuple in grants:
+                    grant_str = grant_tuple[0]
+                    if f"`{database_name}`" in grant_str or database_name in grant_str:
+                        has_grant_on_db = True
+                        break
+                
+                # If user has grant on this database, REVOKE (not DROP)
+                if has_grant_on_db:
+                    # Revoke all privileges on this specific database
+                    cursor.execute(f"REVOKE ALL PRIVILEGES ON `{database_name}`.* FROM '{username}'@'localhost'")
+                    revoked_count += 1
+                    print(f"<!-- Revoked permissions for user: {username} on database: {database_name} -->", file=sys.stderr)
+                    
+            except mysql.connector.Error as e:
+                print(f"<!-- Error checking user {username}: {str(e)} -->", file=sys.stderr)
+                continue
+        
+        cursor.execute("FLUSH PRIVILEGES")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, revoked_count
+        
+    except Exception as e:
+        print(f"<!-- Error revoking database permissions: {str(e)} -->", file=sys.stderr)
+        return False, 0
+    
+# Handle database deletion - ADMIN ONLY
+delete_db_action = form.getvalue("delete_db_action", "")
+db_to_delete = form.getvalue("db_to_delete", "")
+
+if delete_db_action == "1" and db_to_delete:
+    if not is_admin:
+        print("<script>alert('Access Denied: Admin privileges required');window.location.href = 'index.py';</script>")
+        sys.exit()
+    
+    try:
+        # Revoke permissions for all users on this database
+        success, revoked_count = revoke_database_permissions(db_to_delete)
+        
+        # Drop the database
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root"
+        )
+        cursor = conn.cursor()
+        
+        cursor.execute(f"DROP DATABASE IF EXISTS `{db_to_delete}`")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Clear database cookie if user was using the deleted database
+        if database_name == db_to_delete:
+            print("Set-Cookie: database=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/")
+        
+        print()
+        if revoked_count > 0:
+            print(f"<script>alert('Database \"{db_to_delete}\" deleted successfully!\\n\\n{revoked_count} users had their permissions revoked.\\n\\nUsers still exist and can access other databases.');window.location.href = 'index.py';</script>")
+        else:
+            print(f"<script>alert('Database \"{db_to_delete}\" deleted successfully!');window.location.href = 'index.py';</script>")
+        sys.exit()
+        
+    except Exception as e:
+        error_msg = f"Database deletion failed: {str(e)}"
+        print()
+        print(f"<script>alert('{error_msg}');window.location.href = 'index.py';</script>")
+        sys.exit()
 
 # Check if user has selected a database from the dropdown
 if is_logged_in and form.getvalue("database"):
@@ -615,6 +722,14 @@ if is_logged_in:
                 border: none;
             }
             
+            .logo{
+                width: 50px;
+                height: 50px;
+                margin-right: 15px;
+                border-radius: 5px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            }
+            
             .logout-button:hover {
                 background: linear-gradient(135deg, #5a6268 0%, #4e555b 100%);
                 transform: translateY(-2px);
@@ -736,6 +851,7 @@ if is_logged_in:
         <div class="header">
             <div class="header-left">
                 <div class="university-info">
+                <img src="sumeru.jpg" alt="Genshin Impact Logo" class="logo">
                     <div class="university-name">SUMERU AKADEMIYA</div>
                     <div class="subtitle">STUDENT INFORMATION SYSTEM</div>
                     <div class="subtitle">User: """ + html.escape(username) + " (" + role_display + """)</div>
