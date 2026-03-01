@@ -1,0 +1,235 @@
+-- Create subjects table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS subjects(
+    subjid INT NOT NULL,
+    subjcode TEXT NULL DEFAULT NULL,
+    subjdesc TEXT NULL DEFAULT NULL,
+    subjunits INT NULL DEFAULT NULL,
+    subjsched TEXT NULL,
+    PRIMARY KEY (subjid)
+);
+
+-- Create teachers table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS teachers(
+    tid INT NOT NULL,
+    tname TEXT NULL DEFAULT NULL,
+    tdept TEXT NULL DEFAULT NULL,
+    tadd TEXT NULL,
+    tcontact TEXT NULL,
+    tstatus TEXT NULL,
+    PRIMARY KEY (tid)
+);
+
+-- Create assign table with foreign keys
+CREATE TABLE IF NOT EXISTS assign(
+    SubjID INT NOT NULL UNIQUE,
+    TID INT NOT NULL,
+    FOREIGN KEY (SubjID) REFERENCES subjects(subjid),
+    FOREIGN KEY (TID) REFERENCES teachers(tid)
+);
+
+-- Create students table without AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS students(
+    studid INT NOT NULL,
+    studname TEXT NOT NULL,
+    studadd TEXT NULL,
+    studcrs TEXT NULL,
+    studgender TEXT NULL,
+    yrlvl TEXT NULL,
+    PRIMARY KEY (studid)
+);
+
+-- Create enroll table with AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS enroll(
+    eid INT NOT NULL AUTO_INCREMENT,
+    studid INT NULL DEFAULT NULL,
+    subjid INT NULL DEFAULT NULL,
+    evaluation TEXT DEFAULT NULL,
+    PRIMARY KEY (eid),
+    UNIQUE (studid, subjid),
+    FOREIGN KEY (studid) REFERENCES students(studid),
+    FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+);
+
+-- Create grades table with AUTO_INCREMENT
+CREATE TABLE IF NOT EXISTS grades(
+    gradeid INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
+    enroll_eid INT UNIQUE NOT NULL,
+    prelim TEXT NULL DEFAULT NULL,
+    midterm TEXT NULL DEFAULT NULL,
+    prefinal TEXT NULL DEFAULT NULL,
+    final TEXT NULL DEFAULT NULL,
+    FOREIGN KEY (enroll_eid) REFERENCES enroll(eid)
+);
+
+
+CREATE DEFINER=`root`@`localhost` PROCEDURE `conflictsched`(
+    IN studid INT,
+    IN subjid INT,
+    OUT result VARCHAR(255)
+)
+BEGIN
+    DECLARE new_sched TEXT;
+    DECLARE new_days VARCHAR(3);
+    DECLARE new_stime VARCHAR(5);
+    DECLARE new_etime VARCHAR(5);
+    DECLARE old_sched TEXT;
+    DECLARE old_days VARCHAR(3);
+    DECLARE old_stime VARCHAR(5);
+    DECLARE old_etime VARCHAR(5);
+    DECLARE i INT DEFAULT 1;
+    DECLARE n INT;
+    DECLARE new_start_minutes INT;
+    DECLARE new_end_minutes INT;
+    DECLARE old_start_minutes INT;
+    DECLARE old_end_minutes INT;
+    DECLARE dash_position INT;
+    DECLARE colon_position INT;
+    
+    -- Create temporary table
+    CREATE TEMPORARY TABLE IF NOT EXISTS enrolledsubj(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        subjsched TEXT
+    );
+    
+    -- Clear any existing data
+    DELETE FROM enrolledsubj;
+    
+    -- Get enrolled subjects for the student
+    INSERT INTO enrolledsubj(subjsched) 
+    SELECT subjects.subjsched 
+    FROM subjects 
+    INNER JOIN enroll ON subjects.subjid = enroll.subjid 
+    WHERE enroll.studid = studid;
+    
+    -- Get the schedule of the new subject
+    SELECT subjsched INTO new_sched 
+    FROM subjects 
+    WHERE subjects.subjid = subjid
+    LIMIT 1;
+    
+    -- Check if new subject has a schedule
+    IF new_sched IS NULL OR TRIM(new_sched) = '' THEN
+        SET result = 'No conflict';
+    ELSE
+        -- Extract schedule components
+        SET new_sched = TRIM(new_sched);
+        SET new_days = LEFT(new_sched, 3);  -- First 3 chars are days
+        
+        -- Find the dash position to split times
+        SET dash_position = LOCATE('-', new_sched);
+        
+        IF dash_position > 0 THEN
+            -- Extract start time (from after days to before dash)
+            SET new_stime = TRIM(SUBSTRING(new_sched, 4, dash_position - 4));
+            
+            -- Extract end time (from after dash to end)
+            SET new_etime = TRIM(SUBSTRING(new_sched, dash_position + 1));
+            
+            -- Convert times to minutes - with proper parsing
+            SET colon_position = LOCATE(':', new_stime);
+            IF colon_position > 0 THEN
+                SET new_start_minutes = 
+                    CAST(SUBSTRING(new_stime, 1, colon_position - 1) AS UNSIGNED) * 60 + 
+                    CAST(SUBSTRING(new_stime, colon_position + 1, 2) AS UNSIGNED);
+            ELSE
+                SET result = 'Invalid start time format';
+                SET i = 0; -- Skip conflict checking
+            END IF;
+            
+            IF i > 0 THEN
+                SET colon_position = LOCATE(':', new_etime);
+                IF colon_position > 0 THEN
+                    SET new_end_minutes = 
+                        CAST(SUBSTRING(new_etime, 1, colon_position - 1) AS UNSIGNED) * 60 + 
+                        CAST(SUBSTRING(new_etime, colon_position + 1, 2) AS UNSIGNED);
+                ELSE
+                    SET result = 'Invalid end time format';
+                    SET i = 0; -- Skip conflict checking
+                END IF;
+            END IF;
+        ELSE
+            SET result = 'Invalid schedule format';
+            SET i = 0; -- Skip conflict checking
+        END IF;
+        
+        -- Only check for conflicts if schedule is valid
+        IF i > 0 THEN
+            -- Get count of enrolled subjects
+            SELECT COUNT(*) INTO n FROM enrolledsubj;
+            
+            SET result = 'No conflict';
+            
+            -- Check each enrolled subject for conflicts with LABEL for ITERATE
+            conflict_check: WHILE i <= n AND result = 'No conflict' DO
+                SELECT subjsched INTO old_sched 
+                FROM enrolledsubj 
+                WHERE id = i
+                LIMIT 1;
+                
+                -- Check if old subject has a schedule
+                IF old_sched IS NOT NULL AND TRIM(old_sched) != '' THEN
+                    -- Extract schedule components for old subject
+                    SET old_sched = TRIM(old_sched);
+                    SET old_days = LEFT(old_sched, 3);
+                    
+                    -- Find the dash position
+                    SET dash_position = LOCATE('-', old_sched);
+                    
+                    IF dash_position > 0 THEN
+                        -- Extract start time
+                        SET old_stime = TRIM(SUBSTRING(old_sched, 4, dash_position - 4));
+                        
+                        -- Extract end time
+                        SET old_etime = TRIM(SUBSTRING(old_sched, dash_position + 1));
+                        
+                        -- Convert times to minutes with validation
+                        SET colon_position = LOCATE(':', old_stime);
+                        IF colon_position > 0 THEN
+                            SET old_start_minutes = 
+                                CAST(SUBSTRING(old_stime, 1, colon_position - 1) AS UNSIGNED) * 60 + 
+                                CAST(SUBSTRING(old_stime, colon_position + 1, 2) AS UNSIGNED);
+                        ELSE
+                            -- Skip invalid time format entries using ITERATE
+                            SET i = i + 1;
+                            ITERATE conflict_check;
+                        END IF;
+                        
+                        SET colon_position = LOCATE(':', old_etime);
+                        IF colon_position > 0 THEN
+                            SET old_end_minutes = 
+                                CAST(SUBSTRING(old_etime, 1, colon_position - 1) AS UNSIGNED) * 60 + 
+                                CAST(SUBSTRING(old_etime, colon_position + 1, 2) AS UNSIGNED);
+                        ELSE
+                            -- Skip invalid time format entries using ITERATE
+                            SET i = i + 1;
+                            ITERATE conflict_check;
+                        END IF;
+                        
+                        -- Check if schedules overlap (same days AND time ranges overlap)
+                        IF new_days = old_days THEN
+                            -- Check for time overlap: NOT (new ends before old starts OR new starts after old ends)
+                            IF NOT (new_end_minutes <= old_start_minutes OR new_start_minutes >= old_end_minutes) THEN
+                                -- Return the conflicting schedule
+                                SET result = old_sched;
+                            END IF;
+                        END IF;
+                    END IF;
+                END IF;
+                
+                SET i = i + 1;
+            END WHILE conflict_check;
+        END IF;
+    END IF;
+    
+    -- Drop the temporary table
+    DROP TEMPORARY TABLE IF EXISTS enrolledsubj;
+END
+
+
+CREATE TABLE teacher_subjects (
+    tid INT,
+    subjid INT,
+    FOREIGN KEY (tid) REFERENCES teachers(tid),
+    FOREIGN KEY (subjid) REFERENCES subjects(subjid),
+    PRIMARY KEY (tid, subjid)
+);

@@ -1,0 +1,3 @@
+select left (subjsched,3) from subjects where subjid=2000;
+
+select substring(subjsched,11,5) from subjects where subjid=2000;
