@@ -5,6 +5,7 @@ import html
 import sys
 import os
 import http.cookies
+import re
 
 print("Content-Type: text/html")
 
@@ -41,7 +42,7 @@ if 'session_id' in cookies and 'username' in cookies:
     username = cookies['username'].value
     database_name = cookies['database'].value if 'database' in cookies else ""
     user_role = cookies['user_role'].value if 'user_role' in cookies else ""
-    
+
     if session_id:
         is_logged_in = True
         is_admin = (user_role == "admin")
@@ -64,65 +65,112 @@ if not is_student:
     sys.exit()
 
 # Get student ID from username
-import re
-student_id_match = re.search(r'^(\d{4})', username)
+student_id_match = re.search(r'^(\d+)', username)
 student_id = int(student_id_match.group(1)) if student_id_match else None
 
-# Get subject ID from URL
-subjid = form.getvalue("subjid", "")
-
-# DEBUG - Check what we received
-import sys as debug_sys
-print(f"<!-- DEBUG: subjid = '{subjid}' -->", file=debug_sys.stderr)
-print(f"<!-- DEBUG: form keys = {list(form.keys())} -->", file=debug_sys.stderr)
-
-if not subjid:
-    print("<script>alert('No subject selected - subjid is empty');window.location.href = 'studrec.py';</script>")
+if not student_id:
+    print("<script>alert('Could not determine student ID from username');window.location.href = 'studrec.py';</script>")
     sys.exit()
+
+# Get subject ID — handle list if key appears in both query string and POST body
+raw_subjid = form.getvalue("subjid", "")
+raw_subjid = (raw_subjid[0] if isinstance(raw_subjid, list) else raw_subjid).strip()
+
+if not raw_subjid:
+    print("<script>alert('No subject selected');window.location.href = 'studrec.py';</script>")
+    sys.exit()
+
+try:
+    subjid = int(raw_subjid)
+except ValueError:
+    print("<script>alert('Invalid subject ID');window.location.href = 'studrec.py';</script>")
+    sys.exit()
+
+# Status message shown inline (replaces JS alert)
+status_message = ""
+status_type = ""  # "success" or "error"
 
 # Handle comment submission
 submit_comment = form.getvalue("submit_comment", "")
 comment_text = form.getvalue("evaluation_comment", "")
 
-if submit_comment == "1" and comment_text:
-    try:
-        # Connect as ROOT to create table if it doesn't exist
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="root",
-            database=database_name
-        )
-        cursor = conn.cursor(buffered=True)  # ← FIX: buffered cursor
-        
-        # Create evaluations table if it doesn't exist
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS evaluations (
-                eval_id INT AUTO_INCREMENT PRIMARY KEY,
-                studid INT,
-                subjid INT,
-                evaluation_comment TEXT,
-                eval_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (studid) REFERENCES students(studid),
-                FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+if submit_comment == "1":
+    if not comment_text or not comment_text.strip():
+        status_message = "Comment cannot be empty."
+        status_type = "error"
+    else:
+        try:
+            conn = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="root",
+                database=database_name
             )
-        """)
-        conn.commit()
-        
-        # Always INSERT new evaluation (allow multiple comments per student)
-        cursor.execute("INSERT INTO evaluations (studid, subjid, evaluation_comment) VALUES (%s, %s, %s)", 
-                      (student_id, subjid, comment_text))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        print(f"<script>alert('Evaluation submitted successfully!');window.location.href = 'evaluate.py?subjid={subjid}';</script>")
-        sys.exit()
-        
-    except Exception as e:
-        print(f"<script>alert('Error submitting evaluation: {str(e)}');window.location.href = 'evaluate.py?subjid={subjid}';</script>")
-        sys.exit()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS evaluations (
+                    eval_id INT AUTO_INCREMENT PRIMARY KEY,
+                    studid INT,
+                    subjid INT,
+                    evaluation_comment TEXT,
+                    eval_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (studid) REFERENCES students(studid),
+                    FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+                )
+            """)
+            conn.commit()
+
+            # Drop unique constraint if it still exists from old schema.
+            # Must drop foreign keys that depend on it first, then re-add them.
+            cursor.execute("""
+                SELECT COUNT(*) FROM information_schema.statistics
+                WHERE table_schema = %s
+                AND table_name = 'evaluations'
+                AND index_name = 'unique_student_subject'
+            """, (database_name,))
+            if cursor.fetchone()[0] > 0:
+                # Find all foreign keys on the evaluations table
+                cursor.execute("""
+                    SELECT constraint_name FROM information_schema.table_constraints
+                    WHERE table_schema = %s
+                    AND table_name = 'evaluations'
+                    AND constraint_type = 'FOREIGN KEY'
+                """, (database_name,))
+                fk_names = [row[0] for row in cursor.fetchall()]
+
+                # Drop each foreign key
+                for fk in fk_names:
+                    cursor.execute(f"ALTER TABLE evaluations DROP FOREIGN KEY `{fk}`")
+                conn.commit()
+
+                # Now drop the unique index
+                cursor.execute("ALTER TABLE evaluations DROP INDEX unique_student_subject")
+                conn.commit()
+
+                # Re-add the foreign keys
+                cursor.execute("""
+                    ALTER TABLE evaluations
+                    ADD CONSTRAINT fk_eval_studid FOREIGN KEY (studid) REFERENCES students(studid),
+                    ADD CONSTRAINT fk_eval_subjid FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+                """)
+                conn.commit()
+
+            # Always insert — students can comment as many times as they want
+            cursor.execute(
+                "INSERT INTO evaluations (studid, subjid, evaluation_comment) VALUES (%s, %s, %s)",
+                (student_id, subjid, comment_text.strip())
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            status_message = "Evaluation submitted successfully!"
+            status_type = "success"
+
+        except Exception as e:
+            status_message = f"Error submitting evaluation: {html.escape(str(e))}"
+            status_type = "error"
 
 try:
     conn = mysql.connector.connect(
@@ -131,9 +179,8 @@ try:
         password="root",
         database=database_name
     )
-    cursor = conn.cursor(buffered=True)  # ← FIX: buffered cursor
-    
-    # Create evaluations table if it doesn't exist (use ROOT connection)
+    cursor = conn.cursor()
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS evaluations (
             eval_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -146,18 +193,34 @@ try:
         )
     """)
     conn.commit()
-    
-    # Get most recent evaluation (show last comment, but allow multiple)
+
+    # Auto-migrate: drop unique constraint if it still exists from old schema
     cursor.execute("""
-        SELECT evaluation_comment 
-        FROM evaluations 
-        WHERE studid = %s AND subjid = %s 
-        ORDER BY eval_date DESC 
-        LIMIT 1
-    """, (student_id, subjid))
-    existing_eval = cursor.fetchone()
-    existing_comment = existing_eval[0] if existing_eval else ""
-    
+        SELECT COUNT(*) FROM information_schema.statistics
+        WHERE table_schema = %s
+        AND table_name = 'evaluations'
+        AND index_name = 'unique_student_subject'
+    """, (database_name,))
+    if cursor.fetchone()[0] > 0:
+        cursor.execute("""
+            SELECT constraint_name FROM information_schema.table_constraints
+            WHERE table_schema = %s
+            AND table_name = 'evaluations'
+            AND constraint_type = 'FOREIGN KEY'
+        """, (database_name,))
+        fk_names = [row[0] for row in cursor.fetchall()]
+        for fk in fk_names:
+            cursor.execute(f"ALTER TABLE evaluations DROP FOREIGN KEY `{fk}`")
+        conn.commit()
+        cursor.execute("ALTER TABLE evaluations DROP INDEX unique_student_subject")
+        conn.commit()
+        cursor.execute("""
+            ALTER TABLE evaluations
+            ADD CONSTRAINT fk_eval_studid FOREIGN KEY (studid) REFERENCES students(studid),
+            ADD CONSTRAINT fk_eval_subjid FOREIGN KEY (subjid) REFERENCES subjects(subjid)
+        """)
+        conn.commit()
+
     # Get student information
     cursor.execute("""
         SELECT studid, studname, studcrs, yrlvl
@@ -165,13 +228,13 @@ try:
         WHERE studid = %s
     """, (student_id,))
     student_info = cursor.fetchone()
-    
+
     if not student_info:
         print("<script>alert('Student record not found');window.location.href = 'studrec.py';</script>")
         sys.exit()
-    
+
     studid, studname, studcrs, yrlvl = student_info
-    
+
     # Get subject information
     cursor.execute("""
         SELECT subjid, subjcode, subjdesc, subjunits, subjsched
@@ -179,27 +242,63 @@ try:
         WHERE subjid = %s
     """, (subjid,))
     subject_info = cursor.fetchone()
-    
+
     if not subject_info:
         print("<script>alert('Subject not found');window.location.href = 'studrec.py';</script>")
         sys.exit()
-    
+
     subj_id, subj_code, subj_desc, subj_units, subj_sched = subject_info
-    
-    # Check if student is enrolled in this subject
-    cursor.execute("SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s", (student_id, subjid))
+
+    # Check enrollment
+    cursor.execute(
+        "SELECT COUNT(*) FROM enroll WHERE studid = %s AND subjid = %s",
+        (student_id, subjid)
+    )
     is_enrolled = cursor.fetchone()[0] > 0
-    
+
     if not is_enrolled:
         print("<script>alert('You are not enrolled in this subject');window.location.href = 'studrec.py';</script>")
         sys.exit()
-    
-    # Get existing evaluation if any
-    cursor.execute("SELECT evaluation_comment FROM evaluations WHERE studid = %s AND subjid = %s", (student_id, subjid))
-    existing_eval = cursor.fetchone()
-    existing_comment = existing_eval[0] if existing_eval else ""
-    
-    # HTML output with styles matching studrec.py
+
+    # Fetch all previous comments by this student for this subject
+    cursor.execute(
+        "SELECT evaluation_comment, eval_date FROM evaluations WHERE studid = %s AND subjid = %s ORDER BY eval_date ASC",
+        (student_id, subjid)
+    )
+    previous_comments = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    # Build previous comments HTML
+    previous_comments_html = ""
+    if previous_comments:
+        previous_comments_html = '<div style="margin-bottom:15px;">'
+        previous_comments_html += '<p style="font-weight:bold; color:#555; margin-bottom:8px;">Previous comments:</p>'
+        for pc_text, pc_date in previous_comments:
+            previous_comments_html += f"""
+            <div style="background:#f8f9fa; border-left:4px solid #2a5298; padding:10px 15px; margin-bottom:8px; border-radius:4px;">
+                <div style="font-size:12px; color:#888; margin-bottom:4px;">{pc_date}</div>
+                <div>{html.escape(str(pc_text))}</div>
+            </div>"""
+        previous_comments_html += '</div>'
+
+    # Build inline status banner
+    status_banner = ""
+    if status_message:
+        if status_type == "success":
+            banner_style = "background:#d4edda; color:#155724; border:1px solid #c3e6cb;"
+            icon = "&#10003;"
+        else:
+            banner_style = "background:#f8d7da; color:#721c24; border:1px solid #f5c6cb;"
+            icon = "&#10007;"
+        status_banner = f"""
+        <div style="{banner_style} padding:14px 20px; border-radius:8px; margin-bottom:24px;
+                    font-size:15px; font-weight:bold; display:flex; align-items:center; gap:10px;">
+            <span style="font-size:18px;">{icon}</span>
+            {status_message}
+        </div>"""
+
     print(f"""
     <html>
     <head>
@@ -207,10 +306,10 @@ try:
         <style>
             @import url('https://fonts.cdnfonts.com/css/hywenhei');
             * {{ font-family: HYWenHei, sans-serif !important; }}
-            body {{ 
-                font-family: HYWenHei, sans-serif; 
-                margin: 0; 
-                padding: 0; 
+            body {{
+                font-family: HYWenHei, sans-serif;
+                margin: 0;
+                padding: 0;
                 background-color: #f5f5f5;
             }}
             .header {{
@@ -230,9 +329,7 @@ try:
                 background: white;
                 border-radius: 5px;
             }}
-            .header-text {{
-                flex: 1;
-            }}
+            .header-text {{ flex: 1; }}
             .header-title {{
                 font-size: 24px;
                 font-weight: bold;
@@ -264,6 +361,8 @@ try:
                 font-size: 14px;
                 margin-bottom: 30px;
                 transition: all 0.3s ease;
+                text-decoration: none;
+                display: inline-block;
             }}
             .back-button:hover {{
                 transform: translateY(-2px);
@@ -330,11 +429,6 @@ try:
                 box-shadow: 0 6px 12px rgba(30, 60, 114, 0.3);
             }}
         </style>
-        <script>
-            function goBack() {{
-                window.location.href = 'studrec.py';
-            }}
-        </script>
     </head>
     <body>
         <div class="header">
@@ -346,12 +440,14 @@ try:
                 </div>
             </div>
         </div>
-        
+
         <div class="container">
             <h1 class="page-title">Student Evaluation Portal</h1>
-            
-            <button onclick="goBack()" class="back-button">Back to Student Record</button>
-            
+
+            <a href="studrec.py" class="back-button">Back to Student Record</a>
+
+            {status_banner}
+
             <div class="section">
                 <h2 class="section-title">Student Information</h2>
                 <table class="info-table">
@@ -369,7 +465,7 @@ try:
                     </tr>
                 </table>
             </div>
-            
+
             <div class="section">
                 <h2 class="section-title">Subject Information</h2>
                 <table class="info-table">
@@ -395,13 +491,14 @@ try:
                     </tr>
                 </table>
             </div>
-            
+
             <div class="section">
                 <h2 class="section-title">Your Evaluation/Comments:</h2>
                 <form method="POST" action="evaluate.py">
                     <input type="hidden" name="submit_comment" value="1">
                     <input type="hidden" name="subjid" value="{subjid}">
-                    <textarea name="evaluation_comment" placeholder="Enter your thoughts here...">{html.escape(existing_comment)}</textarea>
+                    {previous_comments_html}
+                    <textarea name="evaluation_comment" placeholder="Enter your thoughts here..."></textarea>
                     <button type="submit" class="submit-button">Submit Comment</button>
                 </form>
             </div>
@@ -409,9 +506,6 @@ try:
     </body>
     </html>
     """)
-    
-    cursor.close()
-    conn.close()
 
 except Exception as e:
     print(f"<html><body><h1>Error</h1><p>{html.escape(str(e))}</p></body></html>")
