@@ -136,10 +136,11 @@ if create_db_action == "1":
                     eid INT AUTO_INCREMENT PRIMARY KEY,
                     studid INT,
                     subjid INT,
+                    evaluation TEXT,
                     FOREIGN KEY (studid) REFERENCES students(studid),
                     FOREIGN KEY (subjid) REFERENCES subjects(subjid)
                 )
-            """)
+            """)    
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS grades (
                     gradeid INT AUTO_INCREMENT PRIMARY KEY,

@@ -68,6 +68,86 @@ import re
 teacher_id_match = re.search(r'^(\d{4})', username)
 teacher_id = int(teacher_id_match.group(1)) if teacher_id_match else None
 
+# Grade to numeric conversion
+def letter_to_numeric(letter_grade):
+    """Convert letter grade to numeric value"""
+    grade_map = {
+        'A': 4.0, 'A-': 3.7,
+        'B+': 3.3, 'B': 3.0, 'B-': 2.7,
+        'C+': 2.3, 'C': 2.0, 'C-': 1.7,
+        'D': 1.0, 'F': 0.0,
+        'INC': 0.0, 'NG': 0.0
+    }
+    return grade_map.get(letter_grade, 0.0)
+
+def numeric_to_letter(numeric_grade):
+    """Convert numeric grade back to letter grade"""
+    if numeric_grade >= 3.85: return 'A'
+    elif numeric_grade >= 3.5: return 'A-'
+    elif numeric_grade >= 3.15: return 'B+'
+    elif numeric_grade >= 2.85: return 'B'
+    elif numeric_grade >= 2.5: return 'B-'
+    elif numeric_grade >= 2.15: return 'C+'
+    elif numeric_grade >= 1.85: return 'C'
+    elif numeric_grade >= 1.5: return 'C-'
+    elif numeric_grade >= 0.5: return 'D'
+    else: return 'F'
+
+# Handle Calculate Final Grades action
+calculate_action = form.getvalue("calculate_grades", "")
+if calculate_action == "1":
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="root",
+            database=database_name
+        )
+        cursor = conn.cursor(buffered=True)
+        
+        # Get all grades that have all 4 components
+        cursor.execute("""
+            SELECT enroll_eid, prelim, midterm, prefinal, final
+            FROM grades
+            WHERE prelim IS NOT NULL AND prelim != 'NG'
+            AND midterm IS NOT NULL AND midterm != 'NG'
+            AND prefinal IS NOT NULL AND prefinal != 'NG'
+            AND final IS NOT NULL AND final != 'NG'
+        """)
+        
+        grades_to_calculate = cursor.fetchall()
+        calculated_count = 0
+        
+        for grade_row in grades_to_calculate:
+            eid, prelim, midterm, prefinal, final = grade_row
+            
+            # Convert to numeric
+            prelim_num = letter_to_numeric(prelim)
+            midterm_num = letter_to_numeric(midterm)
+            prefinal_num = letter_to_numeric(prefinal)
+            final_num = letter_to_numeric(final)
+            
+            # Calculate average
+            average = (prelim_num + midterm_num + prefinal_num + final_num) / 4.0
+            
+            # Convert back to letter grade
+            final_letter = numeric_to_letter(average)
+            
+            # Update the final grade
+            cursor.execute("UPDATE grades SET final = %s WHERE enroll_eid = %s", (final_letter, eid))
+            calculated_count += 1
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"<script>alert('Final grades calculated for {calculated_count} students!');window.location.href = 'encodegrades.py';</script>")
+        sys.exit()
+        
+    except Exception as e:
+        print(f"<script>alert('Error calculating grades: {html.escape(str(e))}');window.location.href = 'encodegrades.py';</script>")
+        sys.exit()
+
 # Handle grade saving
 save_action = form.getvalue("save_grades", "")
 if save_action == "1":
@@ -234,15 +314,16 @@ try:
             tr:nth-child(even) {{ background-color: #f9f9f9; }}
             select {{ padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
             select:focus {{ outline: none; border-color: #2a5298; box-shadow: 0 0 0 2px rgba(42,82,152,0.2); }}
-            .save-button {{ background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; padding: 12px 30px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; margin-top: 20px; transition: all 0.3s ease; }}
+            .save-button {{ background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border: none; padding: 12px 30px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; margin-top: 20px; margin-right: 10px; transition: all 0.3s ease; }}
             .save-button:hover {{ transform: translateY(-2px); box-shadow: 0 6px 12px rgba(40,167,69,0.3); }}
+            .calculate-button {{ background: linear-gradient(135deg, #ff9800 0%, #ff5722 100%); color: white; border: none; padding: 12px 30px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; margin-top: 20px; transition: all 0.3s ease; }}
+            .calculate-button:hover {{ transform: translateY(-2px); box-shadow: 0 6px 12px rgba(255,152,0,0.3); }}
             .info-text {{ color: #666; font-size: 14px; margin-bottom: 15px; }}
             .grants-box {{ background: #f0f8ff; border-left: 4px solid #1e3c72; padding: 15px; margin-top: 15px; border-radius: 4px; font-size: 13px; font-family: monospace !important; word-break: break-all; }}
             .grants-box p {{ margin: 4px 0; }}
-            .subjid-link {{ color: #1a0dab; text-decoration: underline; cursor: pointer; font-weight: bold; }}
-            .subjid-link:hover {{ color: #d62c1a; }}
             .students-section {{ display: none; }}
             .students-section.open {{ display: block; }}
+            .button-group {{ display: flex; justify-content: center; gap: 10px; }}
         </style>
         <script>
             function logout() {{
@@ -261,15 +342,28 @@ try:
             }}
 
             function showStudents(subjid) {{
-                // Hide all student sections first
                 document.querySelectorAll('.students-section').forEach(function(el) {{
                     el.classList.remove('open');
                 }});
-                // Show the selected one
                 var section = document.getElementById('students_' + subjid);
                 if (section) {{
                     section.classList.add('open');
                     section.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                }}
+            }}
+            
+            function calculateFinalGrades() {{
+                if (confirm('Calculate final grades for all students with complete grades (Prelim, Midterm, Prefinal)?\\n\\nFormula: (Prelim + Midterm + Prefinal + Final) / 4')) {{
+                    let form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = 'encodegrades.py';
+                    let input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'calculate_grades';
+                    input.value = '1';
+                    form.appendChild(input);
+                    document.body.appendChild(form);
+                    form.submit();
                 }}
             }}
         </script>
@@ -328,6 +422,7 @@ try:
                             <th>Units</th>
                             <th>Schedule</th>
                             <th>#Stud</th>
+                            <th>StudEval</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -336,12 +431,13 @@ try:
             subjid, subjcode, subjdesc, subjunits, subjsched, num_students = subject
             print(f"""
                         <tr>
-                            <td><span class="subjid-link" onclick="showStudents({subjid})">{subjid}</span></td>
+                            <td><a href="javascript:void(0)" onclick="showStudents('{subjid}')" style="color: #1a0dab; text-decoration: underline; cursor: pointer; font-weight: bold;">{subjid}</a></td>
                             <td>{html.escape(str(subjcode))}</td>
                             <td>{html.escape(str(subjdesc))}</td>
                             <td>{subjunits}</td>
                             <td>{html.escape(str(subjsched))}</td>
                             <td>{num_students}</td>
+                            <td><a href="sentiment.py?subjid={subjid}" style="color: #0066cc; text-decoration: underline; cursor: pointer;">Open</a></td>
                         </tr>
             """)
         print("""
@@ -358,7 +454,7 @@ try:
             print(f"""
             <div class="section students-section" id="students_{subjid}">
                 <h2>Enrolled Students - {html.escape(str(subjcode))}: {html.escape(str(subjdesc))}</h2>
-                <p class="info-text">Click a student row to edit grades. Save button is below the table.</p>
+                <p class="info-text">Edit grades below. Click "Calculate Final Grades" to automatically compute final grades based on all four periods.</p>
                 <table>
                     <thead>
                         <tr>
@@ -434,8 +530,9 @@ try:
             """)
 
     print("""
-                <div style="text-align: center;">
-                    <button type="submit" class="save-button">Save</button>
+                <div class="button-group">
+                    <button type="submit" class="save-button">Save Grades</button>
+                    <button type="button" onclick="calculateFinalGrades()" class="calculate-button">Calculate Final Grades</button>
                 </div>
             </form>
         </div>

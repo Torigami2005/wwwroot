@@ -237,8 +237,17 @@ try:
     story.append(info_table)
     story.append(Spacer(1, 20))
 
-    # ── Grades table ──
-    GRADE_LINK = "https://www.youtube.com/watch?v=FTQbiNvZqaY&list=RDFTQbiNvZqaY&start_radio=1&pp=ygUEVG90b6AHAQ%3D%3D"
+    # ── Grades table with evaluate.py links ──
+    # Get server and script path info
+    server_name = os.environ.get('SERVER_NAME', 'localhost')
+    server_port = os.environ.get('SERVER_PORT', '80')
+    script_name = os.environ.get('SCRIPT_NAME', '/cgi-bin/studrec.py')
+    
+    # Build base URL (http://localhost/cgi-bin)
+    protocol = 'https' if server_port == '443' else 'http'
+    port_str = '' if server_port in ['80', '443'] else f':{server_port}'
+    base_path = script_name.rsplit('/', 1)[0]  # Get directory path
+    base_url = f"{protocol}://{server_name}{port_str}{base_path}"
 
     table_data = [['SubjID', 'Subj Code', 'Prelim', 'Midterm', 'Prefinal', 'Final']]
 
@@ -249,9 +258,10 @@ try:
         is_graded = any([prelim, midterm, prefinal, final])
 
         if is_graded:
-            # Clickable blue underlined SubjID
+            # Clickable blue underlined SubjID that links to evaluate.py with subjid parameter
+            evaluate_link = f"{base_url}/evaluate.py?subjid={subjid_val}"
             subjid_cell = Paragraph(
-                f'<link href="{GRADE_LINK}"><u>{subjid_val}</u></link>',
+                f'<link href="{evaluate_link}"><u>{subjid_val}</u></link>',
                 style_link
             )
         else:
