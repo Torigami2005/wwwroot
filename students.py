@@ -791,6 +791,11 @@ try:
     .warning-message {{ background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #ffeaa7; text-align: center; font-weight: bold; }}
     .info-message {{ background-color: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 5px; margin: 15px 0; border: 1px solid #bee5eb; text-align: center; font-weight: bold; }}
     table {{ border-collapse: collapse; width: 100%; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); border-radius: 8px; overflow: hidden; }}
+    .main-content-wrapper {{ max-height: 70vh; overflow-y: auto; padding-right: 10px; }}
+    .main-content-wrapper::-webkit-scrollbar {{ width: 12px; }}
+    .main-content-wrapper::-webkit-scrollbar-track {{ background: #f1f1f1; border-radius: 10px; }}
+    .main-content-wrapper::-webkit-scrollbar-thumb {{ background: #1e3c72; border-radius: 10px; }}
+    .main-content-wrapper::-webkit-scrollbar-thumb:hover {{ background: #2a5298; }}
     th {{ background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 12px 15px; text-align: center; font-weight: bold; font-size: 16px; }}
     td {{ padding: 12px 15px; border-bottom: 1px solid #e0e0e0; text-align: center; transition: background-color 0.2s ease; }}
     tr:hover {{ background-color: rgba(42, 82, 152, 0.05); cursor: pointer; }}
@@ -1543,6 +1548,7 @@ try:
             </div>
         </div>
         
+        <div class="main-content-wrapper">
         <div>
             <div class="form-container">
                 <h2>Students Table for: """ + database_name + """</h2>
@@ -1611,6 +1617,7 @@ try:
                     </button>
                 </div>
             </div>
+        </div>
         </div>
     </div>
     </div>

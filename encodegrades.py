@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import utils.session
 import cgi
 import mysql.connector
 import html
